@@ -1,0 +1,58 @@
+age_post,sex1,race_simple,diagnosis,feresetype,donor,matchgrade_new,regimen,sct_to_bal_final,km_nrm,km_days,cluster_101423_new,bact_final,viral_final,fungal_final,any_final,sample
+5.275838,M,Caucasian,metabolic/inborn errors,Cordblood,1,mismatch,Flu-BU,110,0,365,3,,1,,1,BAL_001
+14.58453,F,Caucasian,metabolic/inborn errors,Cordblood,1,mismatch,Flu-Bu,82,0,365,1,,,,0,BAL_002
+16.38604,F,Caucasian,malignancy,Cordblood,1,mismatch,Flu-Bu,59,1,62,2,,,,0,BAL_003
+7.802875,M,Caucasian,Immunedeficiency,Cordblood,1,fullmatch,Flu-BU,25,1,27,3,,,,0,BAL_004
+1.741273,M,Persian/Turkish/Middle-Eastern,metabolic/inborn errors,Cordblood,1,mismatch,Flu-BU,82,0,365,3,,,,0,BAL_005
+0.9691992,M,Caucasian,metabolic/inborn errors,Bonemarrow,0,fullmatch,Flu-BU,19,0,365,2,,,,0,BAL_006
+1.779603,M,Caucasian,metabolic/inborn errors,Cordblood,1,fullmatch,Flu-BU,85,0,365,3,,1,,1,BAL_007
+2.12731,M,Caucasian,malignancy,Ferese,2,fullmatch,Bu-Cy-VP16,21,1,365,2,,1,,1,BAL_008
+1.232033,M,Caucasian,metabolic/inborn errors,Cordblood,1,fullmatch,Flu-BU,86,0,365,1,,1,,1,BAL_009
+0.29295,F,African/North-African,metabolic/inborn errors,Cordblood,1,mismatch,Bu-Cy,11,0,365,1,,1,,1,BAL_010
+1.182752,F,Caucasian,metabolic/inborn errors,Cordblood,1,mismatch,Bu-Cy,72,0,365,3,1,1,,2,BAL_011
+3.238878,M,Caucasian,malignancy,Bonemarrow,2,mismatch,Bu-Cy-VP16,86,1,41,3,,,,0,BAL_012
+0.2683094,F,Caucasian,metabolic/inborn errors,Cordblood,1,mismatch,Flu-BU,39,1,15,3,,,,0,BAL_013
+7.646817,M,Caucasian,malignancy,Bonemarrow,2,fullmatch,VP16TBI12gy,28,0,365,1,,1,,1,BAL_014
+4.791239,F,Caucasian,Immunedeficiency,Cordblood,1,fullmatch,Flu-BU,95,1,9,2,,,,0,BAL_015
+1.467488,M,African/North-African,metabolic/inborn errors,Cordblood,1,mismatch,Flu-BU,88,0,365,3,,,,0,BAL_016
+17.21561,F,Caucasian,metabolic/inborn errors,Cordblood,1,mismatch,Flu-BU,116,1,54,3,,,,0,BAL_017
+1.201916,F,Caucasian,metabolic/inborn errors,Bonemarrow,0,fullmatch,Bu-Cy,42,0,365,3,,,,0,BAL_018
+0.4161533,F,Caucasian,Immunedeficiency,Cordblood,1,fullmatch,Flu-BU,46,0,365,1,0,,,0,BAL_019
+2.444901,F,Multiracial/Other,malignancy,Cordblood,1,mismatch,Flu-BU,111,1,20,1,,,,0,BAL_020
+7.304586,M,,bone marrow failure,Cordblood,1,fullmatch,Flu150-Cy30Fanconi,155,0,365,3,,,,0,BAL_021
+2.762491,F,,malignancy,Cordblood,1,mismatch,Bu-Cy-Mel,78,0,365,2,,1,,1,BAL_022
+3.066393,F,,malignancy,Cordblood,1,mismatch,Bu-Cy-Mel,189,0,365,2,,,,0,BAL_023
+1.475702,F,,malignancy,Cordblood,1,mismatch,Bu-Cy-Mel,69,0,365,3,,,,0,BAL_024
+17.09514,F,Caucasian,malignancy,Bonemarrow,0,fullmatch,Clo-Flu-BU,7,1,191,2,,,1,1,BAL_025
+14.25051,M,Caucasian,malignancy,Bonemarrow,0,fullmatch,VP16TBI12gy,104,1,2,3,,,,0,BAL_026
+14.51061,F,Caucasian,malignancy,Cordblood,1,mismatch,Clo-Flu-BU,291,0,365,3,,1,1,2,BAL_027
+18.25873,M,Persian/Turkish/Middle-Eastern,metabolic/inborn errors,Ferese,0,fullmatch,Flu-BU,7,0,365,1,1,1,1,3,BAL_028
+18.57084,M,Caucasian,Immunedeficiency,Cordblood,1,mismatch,Flu-BU,15,1,12,3,0,1,1,2,BAL_029
+17.40999,M,Caucasian,Immunedeficiency,Cordblood,1,mismatch,Flu-Bu,114,1,6,3,1,,1,2,BAL_030
+16.82683,F,Caucasian,malignancy,Cordblood,1,fullmatch,Clo-Flu-BU,220,0,20,2,,,,0,BAL_031
+15.9781,M,Caucasian,Immunedeficiency,Bonemarrow,2,fullmatch,BuCyFLU,232,1,299,3,,,,0,BAL_032
+2.661191,M,Caucasian,malignancy,Cordblood,1,mismatch,Flu-BU,74,1,12,3,,,,0,BAL_033
+0.3805613,F,Caucasian,Immunedeficiency,Cordblood,1,fullmatch,BuCyFLU,21,0,365,1,,,,0,BAL_034
+0.9965777,M,Caucasian,malignancy,Cordblood,1,fullmatch,Flu-BU,54,0,365,1,,,,0,BAL_035
+13.54141,M,Caucasian,malignancy,Bonemarrow,2,fullmatch,Clo-Flu-BU,12,0,253,1,,,1,1,BAL_036
+4.807666,M,Eastern European/Russian,malignancy,Bonemarrow,2,fullmatch,VP16TBI12gy,7,0,365,1,0,1,,1,BAL_037
+13.4757,F,Caucasian,malignancy,Cordblood,1,fullmatch,VP16TBI12gy,824,1,12,3,,,,0,BAL_038
+10.86379,M,Caucasian,Immunedeficiency,Cordblood,1,mismatch,Flu-BU,70,0,365,3,1,1,,2,BAL_039
+1.333333,F,Caucasian,Immunedeficiency,Cordblood,1,fullmatch,Flu-BU,148,1,15,3,,,1,1,BAL_040
+0.8459959,F,Caucasian,Immunedeficiency,Cordblood,1,mismatch,Flu-treo,55,0,365,3,,,,0,BAL_041
+11.66598,F,African/North-African,Immunedeficiency,Ferese,2,fullmatch,Bu-Cy,106,0,365,1,,,,0,BAL_042
+3.063655,F,Caucasian,metabolic/inborn errors,Cordblood,1,mismatch,Bu-Cy,85,0,365,2,,,,0,BAL_043
+0.2956879,M,African/North-African,Immunedeficiency,Cordblood,1,mismatch,Flu-BU,21,0,365,1,0,,,0,BAL_044
+11.96988,F,African/North-African,malignancy,Bonemarrow,0,fullmatch,VP16TBI12gy,10,0,365,1,,,,0,BAL_045
+15.68789,M,Asia/SE Asia,bone marrow failure,Cordblood,1,mismatch,Flu-BU,124,1,2,3,,,1,1,BAL_046
+13.47844,M,Caucasian,malignancy,Cordblood,1,fullmatch,Clo-Flu-BU,71,0,365,1,,,,0,BAL_047
+2.978782,F,Caucasian,malignancy,Cordblood,1,fullmatch,Bu-Cy,40,0,27,1,,1,1,2,BAL_048
+1.93566,M,Caucasian,Immunedeficiency,Bonemarrow,2,fullmatch,Flu-Bu,7,0,365,1,,,,0,BAL_049
+1.42642,M,,malignancy,Bonemarrow,2,fullmatch,Clo-Flu-BU,338,0,65,2,,,,0,BAL_050
+0.3723477,M,Caucasian,bone marrow failure,Cordblood,1,mismatch,Flu-BU,30,1,19,3,,,,0,BAL_051
+15.57837,M,Caucasian,malignancy,Cordblood,1,fullmatch,Clo-Flu-BU,15,0,365,3,,1,1,2,BAL_052
+8.172484,M,Caucasian,bone marrow failure,Bonemarrow,2,fullmatch,flu-cy,33,0,365,1,,,,0,BAL_053
+0.6735113,M,Caucasian,malignancy,Cordblood,1,fullmatch,Clo-Flu-BU,9,0,365,1,,1,,1,BAL_054
+14.34086,M,Caucasian,malignancy,Ferese,2,fullmatch,Clo-Flu-BU,15,0,365,1,,1,1,2,BAL_055
+2.105407,M,Caucasian,Immunedeficiency,Cordblood,1,mismatch,Flu-BU,42,0,365,2,,1,1,2,BAL_056
+0.6981519,M,Caucasian,malignancy,Cordblood,1,mismatch,Flu-Bu,76,1,41,1,,,,0,BAL_057
