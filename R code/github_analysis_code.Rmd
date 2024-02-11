@@ -1,0 +1,721 @@
+
+# Prepare MOFA
+
+```{r}
+
+library(MOFA2)
+
+# import the following processed files from pedBMT_BALseq/Data/derivation_cohort
+
+    # microbiome files: species, genus, phyla, microbiome_aggregate, kegg_counts, kegg_modules, kegg_pathways
+    # gene expression files: gene_expression, msigdb, reactome, cibersort, imrep
+    # clinical data files: clinical_metadata
+
+## assign input data
+z1 <- as.matrix(t(species))
+z2 <- as.matrix(t(genus))
+z3 <- as.matrix(t(phyla))
+z4 <- as.matrix(t(microbiome_aggregate))
+z5 <- as.matrix(t(kegg_counts))
+z6 <- as.matrix(t(kegg_module))
+z7 <- as.matrix(t(kegg_pathway))
+z8 <- as.matrix(t(genecounts_vst))
+z9 <- as.matrix(t(msigdb))
+z10 <- as.matrix(t(reactione))
+z11 <- as.matrix(t(imrep))
+z12 <- as.matrix(t(cibersort_fractions))
+
+z <- list(z1, z2, z3, z4, z5, z6, z7, z8, z9, z10, z11, z12)
+
+names(z) <- c("Species", "Genus", "Phyla", "Aggregate", "KEGG_counts", "KEGG_mod", "KEGG_path", "GXP", "MSIGDB", "REACTOME", "Imrep", "Cibersort")
+
+
+## create & train the MOFA
+MOFAobject <- create_mofa(z) # features are ROWS, samples are COLUMNS
+plot_data_overview(MOFAobject)
+data_opts <- get_default_data_options(MOFAobject)
+
+MOFAobject <- prepare_mofa(MOFAobject, data_options= data_opts)
+MOFAobject <- run_mofa(MOFAobject, use_basilisk=TRUE)
+
+slotNames(MOFAobject)
+names(MOFAobject@data)
+names(MOFAobject@expectations)
+
+
+clinical_data$sample <- row.names.data.frame(clinical_data)
+stopifnot(all(sort(clinical_data$sample)==sort(unlist(samples_names(MOFAobject)))))
+samples_metadata(MOFAobject) <- clinical_data
+
+
+## analyze MOFA factors
+plot_factor_cor(MOFAobject)
+plot_variance_explained(MOFAobject, max_r2=15)
+plot_variance_explained(MOFAobject, plot_total = T)[[2]]
+
+
+## correlation between MOFA factors and clinical variables
+correlate_factors_with_covariates(MOFAobject, covariates = c("age_at_study_years", "hsct_to_study_days", "anc", "alc", "spo2_support_dichot", "outcome_dichot", "outcome_dichot_new", "vfd28"), plot="log_pval")
+
+
+## save MOFA output (values of factors 1-15 for each BAL)
+df <- as.data.frame(MOFAobject@expectations[["Z"]][["group1"]])
+
+
+
+```
+
+# BAL clustering based on MOFA
+```{r}
+
+library(cluster)
+library(factoextra)
+library(plot3D)
+library(plotly)
+library(tidyverse)
+
+## Dimensionality reduction
+umap <- run_umap(MOFAobject, n_neighbors = 40, min_dist=0, n_components=15, negative_sample_rate=45, verbose=FALSE)
+umap_dim <- as.data.frame(umap@dim_red[["UMAP"]])
+
+
+## identify ideal number of clusters based on UMAP dimensions
+fviz_nbclust(umap_dim[-1], kmeans, method = "wss") ### Elbow method:
+fviz_nbclust(umap_dim[-1], kmeans, method = "silhouette") ### Silhouette method
+gap_stat <- clusGap(umap_dim[-1], FUN = kmeans, nstart = 25, K.max = 10, B = 500) #up to 10 clusters, bootstrap 500 times
+fviz_gap_stat(gap_stat)
+
+
+## select 4 clusters and generate clustering
+clust <- kmeans(umap_dim[-1], centers = 4, nstart = 25)
+cluster <- as.data.frame(clust$cluster)
+colnames(cluster)[1] <- "cluster"
+write.csv(cluster, "cluster_assignments.csv") # results saved in derivation cohort/output
+
+
+## 3-D visualization
+umap_dim_merge <- merge(umap_dim, cluster, by="row.names")
+rownames(umap_dim_merge) <- umap_dim_merge$Row.names
+umap_dim_merge <- subset(umap_dim_merge, select=-1)
+scatter3D(-1*umap_dim_merge$UMAP1,-1*umap_dim_merge$UMAP2,umap_dim_merge$UMAP3, colvar=as.numeric(umap_dim_merge$cluster), pch=16, cex=1, alpha=0.65, bty="b2", phi=20, theta=55, xlab="UMAP1", ylab="UMAP2", zlab="UMAP3", col=c("#7CAE00", "#F8766D", "#00BFC4", "#C77CFF"))
+
+
+```
+
+# Survival curves by cluster
+```{r}
+
+library(cmprsk)
+library(aod)
+library(survival)
+library(rms)
+
+
+
+# ftime = time-to-event
+ftime <- clinical_data$km_days  
+
+# status = variable containing the outcome events or competing events
+km_outcome <- clinical_data$km_outcome
+
+# factors = patient stratification
+cluster <- factor(cluster, levels=c(1,2,3,4))
+
+# define confounders
+age <- clinical_data$age_at_study_years
+sex <- factor(clinical_data$biological_sex)
+anc <- clinical_data$anc
+alc <- clinical_data$alc
+gvhd <- clinical_data$gvhd_ever
+
+## Kaplan Meier
+km_out <- survfit(formula=Surv(ftime, km_outcome) ~ cluster, type="kaplan-meier", error="greenwood", conf.type="log-log")
+summary(km_out, times=c(100,365,729.9))
+plot(km_out, col=c(1,2,3,4))
+
+
+## Cox model
+cox_model <- coxph(formula = Surv(ftime, km_outcome) ~ cluster, ties = c("efron", "breslow", "exact")[1])
+summary(cox_model)
+
+cox_model <- coxph(formula = Surv(ftime, km_outcome) ~ cluster + age + sex + anc + alc + gvhd, ties = c("efron", "breslow", "exact")[1])
+summary(cox_model)
+```
+
+
+# Compare clinical traits
+```{r}
+
+library(dunn.test)
+library(Rfast)
+
+
+
+## compare continuous variables vs cluster
+kruskaltests(as.matrix(clinical_data$age_at_study_years), as.numeric(as.factor(cluster$cluster)))
+dunn.test(x=clinical_data$hsct_to_study_days, g=cluster$cluster, kw=TRUE, label=TRUE, table=TRUE, alpha=0.05)
+
+
+## compare factor variables vs cluster
+chisq.test(clinical_data$region, cluster$cluster, correct=FALSE)
+
+
+
+```
+
+# Compare taxa masses
+```{r}
+
+library(edgeR)
+library(Rfast)
+
+
+
+
+## compare microbial mass vs cluster using Kruskal-Wallis test
+kw <- kruskaltests(as.matrix(genus), as.numeric(as.factor(cluster$cluster)))
+rownames(kw) <- colnames(genus)
+kw <- as.data.frame(kw)
+kw$fdr <- p.adjust(kw$pvalue, method="fdr")
+kw <- kw[which(kw$fdr<0.05),]
+
+
+## compare microbial mass vs cluster using NB-GLM (repeat at species, phylum levels)
+df <- genus
+df[df==0] <- 0.0001 
+Var1 <- as.factor(cluster$cluster)
+design <- model.matrix(~0 + Var1)
+con <- makeContrasts(
+  Var1.1v2 = Var11 - Var12,
+  Var1.1v3 = Var11 - Var13,
+  Var1.1v4 = Var11 - Var14,
+  Var1.2v3 = Var12 - Var13,
+  Var1.2v4 = Var12 - Var14,
+  Var1.3v4 = Var13 - Var14,
+  levels=design)
+dge <- DGEList(counts = t(df)) #microbes as rows
+dge <- calcNormFactors(dge)
+dge <- estimateDisp(dge, design)
+fit <- glmFit(dge, design, dispersion=dge$tagwise.dispersion)
+fit <- glmLRT(fit, contrast=con)
+etable <- topTags(fit, n=nrow(dge))$table
+edgeR_degs <- etable[ which(etable$FDR < 0.05) ,]  #
+nrow(edgeR_degs)
+
+## compare microbial mass aggregate traits vs cluster using Kruskal-Wallis test
+kw <- kruskaltests(as.matrix(microbiome_aggregate), as.numeric(as.factor(cluster$cluster)))
+rownames(kw) <- colnames(genus)
+kw <- as.data.frame(kw)
+kw$fdr <- p.adjust(kw$pvalue, method="fdr")
+kw <- kw[which(kw$fdr<0.05),]
+
+
+## to plot average taxa mass x cluster as a heatmap:
+brewer=rgb(colorRamp(c("blue", "light blue", "yellow", "orange", "red"), space="rgb", interpolate="linear")(0:255/255), maxColorValue=255)
+breaksList = seq(0, 4.5, by = 0.01)
+
+tibble <- print(as_tibble(as.data.frame(kegg_pathway) %>% mutate(Cluster = cluster$cluster) %>% group_by(Cluster) %>% summarise_all("mean")))
+tibble <- subset(tibble, select=-c(Cluster))
+tibble_t <- as.data.frame(t(tibble))
+tibble_t <- tibble_t[order(rownames(tibble_t)) ,]
+rownames(tibble_t) <- substr(row.names.data.frame(tibble_t), 1, 40)
+tibble_t <- t(tibble_t)
+
+pheatmap(t(tibble_t),
+         color = colorRampPalette((brewer))(length(breaksList)),
+         breaks=breaksList, border_color="white", fontsize=10, width=2, height=2, cluster_rows=FALSE, cluster_cols=FALSE, 
+         cutree_rows=3, scale="none", clustering_distance_rows = "euclidean", clustering_method="ward")
+
+
+## to plot taxa richness or diversity vs cluster as box-whisker plot:
+ggplot(df_new, aes(x=as.factor(cluster), y=simpson)) + geom_violin(trim=TRUE) + geom_boxplot(width=0.3, color="blue") + geom_jitter(shape=16, position=position_jitter(0.1)) + theme(legend.position="none", axis.title.x = element_blank())
+
+```
+
+
+# Compare KEGG transcripts
+```{r}
+
+library(edgeR)
+library(Rfast)
+
+
+
+## compare pathways vs cluster using KW and edgeR as above
+
+## to plot average pathway mass x cluster as a heatmap:
+
+
+## first, import list of kegg pathways of interest
+kegg_pathways_ofinterest <- c("map01100: Metabolic pathways", 
+"map01110: Biosynthesis of secondary metabolites", 
+"map01120: Microbial metabolism in diverse environments", 
+"map01200: Carbon metabolism", 
+"map01210: 2-Oxocarboxylic acid metabolism", 
+"map01212: Fatty acid metabolism", 
+"map01220: Degradation of aromatic compounds", 
+"map01230: Biosynthesis of amino acids", 
+"map01232: Nucleotide metabolism", 
+"map01240: Biosynthesis of cofactors", 
+"map01250: Biosynthesis of nucleotide sugars"
+)
+
+kegg_pathways_ofinterest <- c(
+"map00010: Glycolysis / Gluconeogenesis", 
+"map00020: Citrate cycle (TCA cycle)", 
+"map00030: Pentose phosphate pathway", 
+"map00040: Pentose and glucuronate interconversions", 
+"map00051: Fructose and mannose metabolism", 
+"map00052: Galactose metabolism", 
+"map00053: Ascorbate and aldarate metabolism", 
+"map00500: Starch and sucrose metabolism", 
+"map00520: Amino sugar and nucleotide sugar metabolism", 
+"map00620: Pyruvate metabolism", 
+"map00630: Glyoxylate and dicarboxylate metabolism", 
+"map00640: Propanoate metabolism", 
+"map00650: Butanoate metabolism", 
+"map00660: C5-Branched dibasic acid metabolism", 
+"map00562: Inositol phosphate metabolism"
+)
+
+kegg_pathways_ofinterest <- c("map00190: Oxidative phosphorylation", 
+"map00195: Photosynthesis", 
+"map00196: Photosynthesis - antenna proteins", 
+"map00710: Carbon fixation in photosynthetic organisms", 
+"map00720: Carbon fixation pathways in prokaryotes", 
+"map00680: Methane metabolism", 
+"map00910: Nitrogen metabolism", 
+"map00920: Sulfur metabolism"
+)
+
+kegg_pathways_ofinterest <- c("map00061: Fatty acid biosynthesis", 
+"map00062: Fatty acid elongation", 
+"map00071: Fatty acid degradation", 
+"map00073: Cutin, suberine and wax biosynthesis", 
+"map00100: Steroid biosynthesis", 
+"map00120: Primary bile acid biosynthesis", 
+"map00121: Secondary bile acid biosynthesis", 
+"map00140: Steroid hormone biosynthesis", 
+"map00561: Glycerolipid metabolism", 
+"map00564: Glycerophospholipid metabolism", 
+"map00565: Ether lipid metabolism", 
+"map00600: Sphingolipid metabolism", 
+"map00590: Arachidonic acid metabolism", 
+"map00591: Linoleic acid metabolism", 
+"map00592: alpha-Linolenic acid metabolism", 
+"map01040: Biosynthesis of unsaturated fatty acids"
+)
+
+kegg_pathways_ofinterest <- c("map00220: Arginine biosynthesis", 
+"map00230: Purine metabolism", 
+"map00240: Pyrimidine metabolism", 
+"map00250: Alanine, aspartate and glutamate metabolism", 
+"map00260: Glycine, serine and threonine metabolism", 
+"map00270: Cysteine and methionine metabolism", 
+"map00280: Valine, leucine and isoleucine degradation", 
+"map00290: Valine, leucine and isoleucine biosynthesis", 
+"map00300: Lysine biosynthesis", 
+"map00310: Lysine degradation", 
+"map00220: Arginine biosynthesis", 
+"map00330: Arginine and proline metabolism", 
+"map00340: Histidine metabolism", 
+"map00350: Tyrosine metabolism", 
+"map00360: Phenylalanine metabolism", 
+"map00380: Tryptophan metabolism", 
+"map00400: Phenylalanine, tyrosine and tryptophan biosynthesis"
+)
+
+kegg_pathways_ofinterest <- c("map00510: N-Glycan biosynthesis", 
+"map00513: Various types of N-glycan biosynthesis", 
+"map00512: Mucin type O-glycan biosynthesis", 
+"map00515: Mannose type O-glycan biosynthesis", 
+"map00514: Other types of O-glycan biosynthesis", 
+"map00532: Glycosaminoglycan biosynthesis - chondroitin sulfate / dermatan sulfate", 
+"map00534: Glycosaminoglycan biosynthesis - heparan sulfate / heparin", 
+"map00533: Glycosaminoglycan biosynthesis - keratan sulfate", 
+"map00531: Glycosaminoglycan degradation", 
+"map00563: Glycosylphosphatidylinositol (GPI)-anchor biosynthesis", 
+"map00601: Glycosphingolipid biosynthesis - lacto and neolacto series", 
+"map00603: Glycosphingolipid biosynthesis - globo and isoglobo series", 
+"map00604: Glycosphingolipid biosynthesis - ganglio series", 
+"map00511: Other glycan degradation", 
+"map00540: Lipopolysaccharide biosynthesis", 
+"map00542: O-Antigen repeat unit biosynthesis", 
+"map00541: O-Antigen nucleotide sugar biosynthesis", 
+"map00550: Peptidoglycan biosynthesis", 
+"map00552: Teichoic acid biosynthesis", 
+"map00571: Lipoarabinomannan (LAM) biosynthesis", 
+"map00572: Arabinogalactan biosynthesis - Mycobacterium", 
+"map00543: Exopolysaccharide biosynthesis"
+)
+
+## second, remove extra quotes from main kegg pathways dataframes
+colnames(kegg_pathway) <- gsub('"', '', colnames(kegg_pathway))
+
+## third, filter
+kegg_pathway <- kegg_pathway[,colnames(kegg_pathway) %in% kegg_pathways_ofinterest]
+
+
+brewer=rgb(colorRamp(c("blue", "light blue", "yellow", "orange", "red"), space="rgb", interpolate="linear")(0:255/255), maxColorValue=255)
+breaksList = seq(0, 4.5, by = 0.01)
+
+tibble <- print(as_tibble(as.data.frame(kegg_pathway) %>% mutate(Cluster = cluster$cluster) %>% group_by(Cluster) %>% summarise_all("mean")))
+tibble <- subset(tibble, select=-c(Cluster))
+tibble_t <- as.data.frame(t(tibble))
+tibble_t <- tibble_t[order(rownames(tibble_t)) ,]
+rownames(tibble_t) <- substr(row.names.data.frame(tibble_t), 1, 40)
+tibble_t <- t(tibble_t)
+
+pheatmap(t(tibble_t),
+         color = colorRampPalette((brewer))(length(breaksList)),
+         breaks=breaksList, border_color="white", fontsize=10, width=2, height=2, cluster_rows=FALSE, cluster_cols=FALSE, 
+         cutree_rows=3, scale="none", clustering_distance_rows = "euclidean", clustering_method="ward")
+
+
+
+
+```
+
+# Compare AMR genes
+```{r}
+
+# load amr_gene_sums.csv from derivation_cohort/antimicrobial_resistance_genes folder
+
+
+# test for association between amr genes & cluster or outcome
+cor.test(amr_gene_sums$amr_sums_adjusted_ercc, antibacterial_score$antibact_score_sum, method="spearman")
+Rfast::kruskaltests(as.matrix(amr_gene_sums$amr_sums_adjusted_ercc), as.numeric(as.factor(clustercluster$cluster)))
+
+
+# plot differences in amr genes by cluster
+ggplot(df_wide_new, aes(x=as.factor(cluster), y=amr_sums, color=as.factor(cluster))) + geom_violin(trim=TRUE) + geom_boxplot(width=0.3, color="blue") + scale_y_continuous(trans='log10', oob = scales::squish_infinite) + geom_jitter(shape=16, position=position_jitter(0.1)) + theme(legend.position="none", axis.title.x = element_blank())  
+
+
+```
+
+# Compare pathogen burden
+```{r}
+
+# import species_melt and genus_melt from derivation_cohort/microbiome_data
+
+# to plot a certain microbe or list of microbes in all patients:
+
+list <- c("Alphacoronavirus", "Alphainfluenzavirus", "Betacoronavirus", "Betainfluenzavirus", "Enterovirus", "Gammainfluenzavirus", "Mastadenovirus", "Metapneumovirus", "Orthopneumovirus", "Orthorubulavirus", "Respirovirus")
+list <- c("Cytomegalovirus", "Lymphocryptovirus", "Roseolovirus", "Simplexvirus")
+list <- c("Alphacoronavirus", "Alphainfluenzavirus", "Betacoronavirus", "Betainfluenzavirus", "Enterovirus", "Gammainfluenzavirus", "Mastadenovirus", "Metapneumovirus", "Orthopneumovirus", "Respirovirus", "Cytomegalovirus", "Lymphocryptovirus", "Roseolovirus", "Simplexvirus")
+    # etc
+
+
+df_sub_new <- df_sub[which(df_sub$genus %in% list),]
+
+ggplot(df_sub_new, aes(x=mass, y=log10(pctdom+0.1), size=mass)) + geom_point(aes(color=zscore)) + scale_color_gradientn(colors=c("light grey", "red,", "red"), limits=c(-2,17)) + scale_size_continuous(limits=c(-5,10), breaks=c(-5,-2.5,0,2.5,5)) + xlim(-5,5) + ylim(-1,2) + theme(legend.position="none", axis.title.x = element_blank(), axis.title.y = element_blank(), panel.background = element_rect(fill='transparent'), plot.background = element_rect(fill='transparent', color=NA), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.background =element_rect(fill='transparent'), legend.box.background = element_rect(fill='transparent'))
+
+
+    # or:
+
+
+ggplot(df_sub[which(df_sub$species=="Haemophilus influenzae"),], aes(x=mass, y=log10(pctdom+0.1), size=mass)) + geom_point(aes(color=zscore)) + scale_color_gradientn(colors=c("light grey", "red", "red"), limits=c(-2,9)) + scale_size_continuous(limits=c(-5,10), breaks=c(-5,-2.5,0,2.5,5)) + xlim(-5,5) + ylim(-1,2) + theme(legend.position="none", axis.title.x = element_blank(), axis.title.y = element_blank(), panel.background = element_rect(fill='transparent'), plot.background = element_rect(fill='transparent', color=NA), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.background =element_rect(fill='transparent'), legend.box.background = element_rect(fill='transparent'))
+
+
+# to plot all microbes in one particular patient:
+
+ggplot(df_sub1[which(df_sub1$sample=="BAL_001"),], aes(x=mass, y=log10(pctdom+0.1), size=mass)) + geom_point(aes(color=zscore)) + scale_color_gradientn(colors=c("blue", "red"), limits=c(-2,16)) + scale_size_continuous(limits=c(-5,10), breaks=c(-5,-2.5,0,2.5,5)) + xlim(-5,5) + ylim(-1,2) + geom_text(aes(label=genus))  #limits=c(-12,16)
+
+
+```
+
+# Compare antimicrobial exposure
+```{r}
+
+
+## read in antibacterial_score, antifungal_days, antiviral_days, anti-anaerobe_days from derivation_cohort/clinical_data
+
+
+## compare metrics vs cluster using Kruskal-Wallis test
+kw <- kruskaltests(as.matrix(antibacterial_score$antibact_score_sum), as.numeric(as.factor(cluster$cluster)))
+rownames(kw) <- colnames(genus)
+kw <- as.data.frame(kw)
+kw$fdr <- p.adjust(kw$pvalue, method="fdr")
+kw <- kw[which(kw$fdr<0.05),]
+
+
+
+## associate anti-bacterial exposure score (AES) with BAL microbe quantities
+## repeat below with species, genus, phylum-level data
+
+
+Var1 <- antibacterial_score$antibact_score_sum
+design <- model.matrix(~Var1)
+dge <- DGEList(counts = species) #microbes as rows
+dge <- calcNormFactors(dge)
+dge <- estimateDisp(dge, design)
+fit <- glmFit(dge, design, dispersion=dge$common.dispersion)
+fit <- glmLRT(fit, coef=2)
+etable <- topTags(fit, n=nrow(dge))$table
+etable <- etable[abs(order(etable$logFC)), ] #this orders the results by LFC
+edgeR_degs <- etable[ which(etable$FDR < 0.05) ,]  #save results with FDR<0.05 as a new variable (FDR is similar to padj)
+
+
+## dotplot of AES vs microbes:
+ggplot(edgeR_degs, aes(x=logFC, y=factor(taxa, levels=rev(levels(factor(taxa)))))) + geom_point(aes(size=abs(logFC), color=logFC)) + scale_color_gradient2(low="blue", mid="white", high="red")
+
+
+## compare AES vs outcome
+cor.test(x=abx_score$antibact_score_sum, y=agg$simpson, method="spearman")
+
+
+## test for mediation (here is an example of how to test for whether the association between preceding antibiotic exposure and death is mediated by an antibiotic-induced change in a certain bacteria)
+
+a ~ antibact_score_sum, family=binomial(link="logit"), data=df)
+summary(a)
+
+b <- glm(Veillonella ~ antibact_score_sum + anc + alc + spo2_support_dichot, family="poisson", data=df) 
+summary(b)
+
+c <- glm(outcome_dichot_new ~ Veillonella + antibact_score_sum + anc + alc + spo2_support_dichot, family=binomial(link="logit"), data=df)
+summary(c)
+
+ordbin <- mediation::mediate(b, c, sims=500, treat="antibact_score_sum", mediator="Veillonella",  control.value=0, treat.value=800, boot=TRUE, boot.ci.type="bca")
+summary(ordbin) 
+plot(ordbin, treatment = NULL, labels = NULL, effect.type = c("indirect", "direct", "total"), xlim = c(-1,1), ylim = NULL, main = "AES-Mortality Mediation Through BAL Veillonella", lwd = 1.5,  cex = 0.85, col = "black")
+
+
+```
+
+
+
+# Compare gene expression
+```{r}
+
+## raw counts are not available on GitHub but can be generated from raw sequencing files available at dbGaP
+
+## NB-GLM
+counts <- read.csv("counts.csv", header=TRUE, row.names=1, check.names=FALSE)
+Var1 <- as.factor(cluster$cluster)
+design <- model.matrix(~0 + Var1) # for 3+ groups, need to do it with 0 + Var1
+con <- makeContrasts(
+  Var1.1v2 = Var11 - Var12,
+  Var1.1v3 = Var11 - Var13,
+  Var1.1v4 = Var11 - Var14,
+  Var1.2v3 = Var12 - Var13,
+  Var1.2v4 = Var12 - Var14,
+  Var1.3v4 = Var13 - Var14,
+  levels=design)
+dge <- DGEList(counts = t(counts)) #genes as rows
+dge <- calcNormFactors(dge)
+dge <- estimateDisp(dge, design)
+fit <- glmFit(dge, design, dispersion=dge$tagwise.dispersion)
+fit <- glmLRT(fit, contrast=con)
+etable <- topTags(fit, n=nrow(dge))$table
+edgeR_degs <- etable[ which(etable$FDR < 0.05) ,]  #save results with FDR<0.05 as a new variable (FDR is similar to padj)
+nrow(edgeR_degs)
+
+      # the output of this step is included in supplemental data in the manuscript
+
+# to plot these DEGs by cluster:
+      genecounts_vst_sub <- gene_expression %>% filter(rownames(gene_expression) %in% rownames(edgeR_degs))
+      genecounts_vst_sub <- as.data.frame(t(genecounts_vst_sub))
+      tibble <- print(as_tibble(as.data.frame(genecounts_vst_sub) %>% mutate(Cluster = total_cluster$cluster) %>% group_by(Cluster) %>% summarise_all("mean")))
+      tibble_t <- as.data.frame(t(tibble))
+      tibble_t <- scale(t(tibble_t), center=TRUE, scale=TRUE) ## make sure variables are in COLUMNS
+      tibble_t <- t(tibble_t)
+      
+      brewer=rgb(colorRamp(c("blue", "light blue", "yellow", "orange", "red"), space="rgb", interpolate="linear")(0:255/255), maxColorValue=255)
+      breaksList = seq(-1.6, 1.6, by = 0.001)
+      pheatmap(tibble_t,
+         color = colorRampPalette((brewer))(length(breaksList)), breaks=breaksList, border_color=NA,
+         legend=FALSE, show_rownames = FALSE, show_colnames = FALSE, cluster_rows=TRUE, 
+         cluster_cols=FALSE, clustering_distance_rows = "euclidean", clustering_method="ward.D2")
+
+# to plot top genes by cluster:
+      
+
+p1 <- ggplot(df_new, aes(x=as.factor(cluster), y=IL1B, fill=as.factor(cluster))) + geom_violin(trim=TRUE, aes(fill=NULL)) + geom_boxplot(width=0.6, color="black", outlier.shape = NA) + geom_jitter(shape=16, position=position_jitter(0.15), size=0.5) + scale_y_continuous(oob = scales::squish_infinite, limits=c(-2,3)) + theme(legend.position="none", axis.title.x = element_blank(), axis.title.y = element_blank(), panel.background = element_rect(fill='transparent'), plot.background = element_rect(fill='transparent', color=NA), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.background =element_rect(fill='transparent'), legend.box.background = element_rect(fill='transparent'))
+
+p2 <- ggplot(df_new, aes(x=as.factor(cluster), y=NFKB2, fill=as.factor(cluster))) + geom_violin(trim=TRUE, aes(fill=NULL)) + geom_boxplot(width=0.6, color="black", outlier.shape = NA) + geom_jitter(shape=16, position=position_jitter(0.15), size=0.5) + scale_y_continuous(oob = scales::squish_infinite, limits=c(-2,3)) + theme(legend.position="none", axis.title.x = element_blank(), axis.title.y = element_blank(), panel.background = element_rect(fill='transparent'), plot.background = element_rect(fill='transparent', color=NA), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.background =element_rect(fill='transparent'), legend.box.background = element_rect(fill='transparent'))
+
+p3 <- ggplot(df_new, aes(x=as.factor(cluster), y=CSF3R, fill=as.factor(cluster))) + geom_violin(trim=TRUE, aes(fill=NULL)) + geom_boxplot(width=0.6, color="black", outlier.shape = NA) + geom_jitter(shape=16, position=position_jitter(0.15), size=0.5) + scale_y_continuous(oob = scales::squish_infinite, limits=c(-2,3)) + theme(legend.position="none", axis.title.x = element_blank(), axis.title.y = element_blank(), panel.background = element_rect(fill='transparent'), plot.background = element_rect(fill='transparent', color=NA), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.background =element_rect(fill='transparent'), legend.box.background = element_rect(fill='transparent'))
+      
+
+p4 <- ggplot(df_new, aes(x=as.factor(cluster), y=FTL, fill=as.factor(cluster))) + geom_violin(trim=TRUE, aes(fill=NULL)) + geom_boxplot(width=0.6, color="black", outlier.shape = NA) + geom_jitter(shape=16, position=position_jitter(0.15), size=0.5) + scale_y_continuous(oob = scales::squish_infinite, limits=c(-2.5,2.5)) + theme(legend.position="none", axis.title.x = element_blank(), axis.title.y = element_blank(), panel.background = element_rect(fill='transparent'), plot.background = element_rect(fill='transparent', color=NA), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.background =element_rect(fill='transparent'), legend.box.background = element_rect(fill='transparent'))
+
+p5 <- ggplot(df_new, aes(x=as.factor(cluster), y=HLA.DRA, fill=as.factor(cluster))) + geom_violin(trim=TRUE, aes(fill=NULL)) + geom_boxplot(width=0.6, color="black", outlier.shape = NA) + geom_jitter(shape=16, position=position_jitter(0.15), size=0.5) + scale_y_continuous(oob = scales::squish_infinite, limits=c(-2.5,2.5)) + theme(legend.position="none", axis.title.x = element_blank(), axis.title.y = element_blank(), panel.background = element_rect(fill='transparent'), plot.background = element_rect(fill='transparent', color=NA), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.background =element_rect(fill='transparent'), legend.box.background = element_rect(fill='transparent'))
+
+p6 <- ggplot(df_new, aes(x=as.factor(cluster), y=CSF1R, fill=as.factor(cluster))) + geom_violin(trim=TRUE, aes(fill=NULL)) + geom_boxplot(width=0.6, color="black", outlier.shape = NA) + geom_jitter(shape=16, position=position_jitter(0.15), size=0.5) + scale_y_continuous(oob = scales::squish_infinite, limits=c(-2.5,2.5)) + theme(legend.position="none", axis.title.x = element_blank(), axis.title.y = element_blank(), panel.background = element_rect(fill='transparent'), plot.background = element_rect(fill='transparent', color=NA), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.background =element_rect(fill='transparent'), legend.box.background = element_rect(fill='transparent'))
+
+
+p7 <- ggplot(df_new, aes(x=as.factor(cluster), y=COL6A1, fill=as.factor(cluster))) + geom_violin(trim=TRUE, aes(fill=NULL)) + geom_boxplot(width=0.6, color="black", outlier.shape = NA) + geom_jitter(shape=16, position=position_jitter(0.15), size=0.5) + scale_y_continuous(oob = scales::squish_infinite, limits=c(-3,3)) + theme(legend.position="none", axis.title.x = element_blank(), axis.title.y = element_blank(), panel.background = element_rect(fill='transparent'), plot.background = element_rect(fill='transparent', color=NA), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.background =element_rect(fill='transparent'), legend.box.background = element_rect(fill='transparent'))
+
+p8 <- ggplot(df_new, aes(x=as.factor(cluster), y=FGF3, fill=as.factor(cluster))) + geom_violin(trim=TRUE, aes(fill=NULL)) + geom_boxplot(width=0.6, color="black", outlier.shape = NA) + geom_jitter(shape=16, position=position_jitter(0.15), size=0.5) + scale_y_continuous(oob = scales::squish_infinite, limits=c(-3,3)) + theme(legend.position="none", axis.title.x = element_blank(), axis.title.y = element_blank(), panel.background = element_rect(fill='transparent'), plot.background = element_rect(fill='transparent', color=NA), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.background =element_rect(fill='transparent'), legend.box.background = element_rect(fill='transparent'))
+
+p9 <- ggplot(df_new, aes(x=as.factor(cluster), y=WNT1, fill=as.factor(cluster))) + geom_violin(trim=TRUE, aes(fill=NULL)) + geom_boxplot(width=0.6, color="black", outlier.shape = NA) + geom_jitter(shape=16, position=position_jitter(0.15), size=0.5) + scale_y_continuous(oob = scales::squish_infinite, limits=c(-3,3)) + theme(legend.position="none", axis.title.x = element_blank(), axis.title.y = element_blank(), panel.background = element_rect(fill='transparent'), plot.background = element_rect(fill='transparent', color=NA), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.background =element_rect(fill='transparent'), legend.box.background = element_rect(fill='transparent'))
+
+
+p10 <- ggplot(df_new, aes(x=as.factor(cluster), y=ANGPT2, fill=as.factor(cluster))) + geom_violin(trim=TRUE, aes(fill=NULL)) + geom_boxplot(width=0.6, color="black", outlier.shape = NA) + geom_jitter(shape=16, position=position_jitter(0.15), size=0.5) + scale_y_continuous(oob = scales::squish_infinite, limits=c(-2.5,3)) + theme(legend.position="none", axis.title.x = element_blank(), axis.title.y = element_blank(), panel.background = element_rect(fill='transparent'), plot.background = element_rect(fill='transparent', color=NA), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.background =element_rect(fill='transparent'), legend.box.background = element_rect(fill='transparent'))
+
+p11 <- ggplot(df_new, aes(x=as.factor(cluster), y=IL2, fill=as.factor(cluster))) + geom_violin(trim=TRUE, aes(fill=NULL)) + geom_boxplot(width=0.6, color="black", outlier.shape = NA) + geom_jitter(shape=16, position=position_jitter(0.15), size=0.5) + scale_y_continuous(oob = scales::squish_infinite, limits=c(-2.5,3)) + theme(legend.position="none", axis.title.x = element_blank(), axis.title.y = element_blank(), panel.background = element_rect(fill='transparent'), plot.background = element_rect(fill='transparent', color=NA), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.background =element_rect(fill='transparent'), legend.box.background = element_rect(fill='transparent'))
+
+p12 <- ggplot(df_new, aes(x=as.factor(cluster), y=MMP7, fill=as.factor(cluster))) + geom_violin(trim=TRUE, aes(fill=NULL)) + geom_boxplot(width=0.6, color="black", outlier.shape = NA) + geom_jitter(shape=16, position=position_jitter(0.15), size=0.5) + scale_y_continuous(oob = scales::squish_infinite, limits=c(-2.5,3)) + theme(legend.position="none", axis.title.x = element_blank(), axis.title.y = element_blank(), panel.background = element_rect(fill='transparent'), plot.background = element_rect(fill='transparent', color=NA), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.background =element_rect(fill='transparent'), legend.box.background = element_rect(fill='transparent'))
+
+cowplot::plot_grid(p4,p5,p6,p1,p2,p3,p7,p8,p9,p10,p11,p12,ncol=3, align="v")
+
+
+## compare gene set enrichment scores vs cluster using Kruskal-Wallis test
+msigdb <- read.csv("msigdb.csv", header=TRUE, row.names=1, check.names=FALSE)
+kw <- kruskaltests(as.matrix(msigdb), as.numeric(as.factor(cluster$cluster)))
+rownames(kw) <- colnames(msigdb)
+kw <- as.data.frame(kw)
+kw$fdr <- p.adjust(kw$pvalue, method="fdr")
+kw <- kw[which(kw$fdr<0.05),]
+
+## followed by Dunn test for significant findings
+dunn.test(x=msigdb$geneset1, g=cluster$cluster, kw=TRUE, label=TRUE, table=TRUE, alpha=0.05)
+
+
+# plot top Reactome gene set scores
+
+reactome_keep <- c("2.REACTOME_INTERLEUKIN_6_SIGNALING",
+                   "37.REACTOME_MAPK1_ERK2_ACTIVATION",
+                   "111.REACTOME_DEFENSINS",
+                   "451.REACTOME_MHC_CLASS_II_ANTIGEN_PRESENTATION",
+                   "1546.REACTOME_GROWTH_HORMONE_RECEPTOR_SIGNALING",
+                   
+                   "624.REACTOME_CHEMOKINE_RECEPTORS_BIND_CHEMOKINES",
+                   "465.REACTOME_INTEGRIN_CELL_SURFACE_INTERACTIONS",
+                   "672.REACTOME_LEUKOTRIENE_RECEPTORS",
+                   "442.REACTOME_XENOBIOTICS",
+                   "441.REACTOME_EICOSANOIDS",
+                   
+                   "488.REACTOME_CROSSLINKING_OF_COLLAGEN_FIBRILS",
+                   "728.REACTOME_TIGHT_JUNCTION_INTERACTIONS",
+                   "316.REACTOME_FGFR3B_LIGAND_BINDING_AND_ACTIVATION",
+                   "345.REACTOME_VEGF_LIGAND_RECEPTOR_INTERACTIONS",
+                   "159.REACTOME_ACTIVATION_OF_MATRIX_METALLOPROTEINASES",
+                   
+                   "587.REACTOME_APOPTOTIC_CLEAVAGE_OF_CELL_ADHESION_PROTEINS",
+                   "911.REACTOME_CILIUM_ASSEMBLY",
+                   "234.REACTOME_EXPORT_OF_VIRAL_RIBONUCLEOPROTEINS_FROM_NUCLEUS",
+                   "1181.REACTOME_DNA_DAMAGE_REVERSAL",
+                   "218.REACTOME_TERMINAL_PATHWAY_OF_COMPLEMENT"
+                                      )
+
+reactome_keep <- unique(reactome_keep)
+
+
+## second, remove extra quotes from main pathways dataframes
+colnames(df_new) <- gsub('"', '', colnames(df_new))
+
+## third, filter
+df_new_sub <- df_new[,colnames(df_new) %in% reactome_keep]
+
+tibble_g <- print(as_tibble(as.data.frame(df_new_sub) %>% mutate(Cluster = total_cluster$cluster) %>% group_by(Cluster) %>% summarise_all("mean")))
+tibble_g <- subset(tibble_g, select=-c(Cluster))
+tibble_g <- scale(tibble_g, center=TRUE, scale=TRUE) ## make sure variables are in COLUMNS
+tibble_g_t <- as.data.frame(t(tibble_g))
+
+tibble_g_t$pathways <- row.names.data.frame(tibble_g_t)
+df_melt <- melt(tibble_g_t)
+
+
+reactome_keep <- gsub(x = reactome_keep, pattern = "_", replacement = " ")  # convert _ back to spaces
+reactome_keep <- gsub(x = reactome_keep, pattern = ".REACTOME", replacement = " ")  # convert _ back to spaces
+
+df_melt$pathways <- gsub(x = df_melt$pathways, pattern = "_", replacement = " ")  # convert _ back to spaces
+df_melt$pathways <- gsub(x = df_melt$pathways, pattern = ".REACTOME", replacement = " ")  # convert _ back to spaces
+
+df_melt <- df_melt %>% arrange(factor(pathways, levels = reactome_keep))
+df_melt$pathways <- factor(df_melt$pathways, levels=rev(reactome_keep), ordered=TRUE)
+
+ggplot(data=df_melt, aes(x=variable, y=factor(pathways), color=value, size=value)) + geom_point() +
+      scale_color_gradientn(colors=c("blue", "blue", "light blue", "yellow", "orange", "red", "red"), trans="pseudo_log") +
+      theme(panel.background = element_rect(fill="white")) 
+
+
+
+## repeat KW for comparison of cell fractions, TCR clonotypes, TCR shannon diversity
+
+```
+
+# Cluster transitions
+```{r}
+
+library(ggalluvial)
+  
+
+alluvial <- read.csv("alluvial.csv", header=TRUE, row.names=1, check.names=FALSE)
+ggplot(alluvial, aes(axis1=start, axis2=end, y=freq)) + geom_alluvium(aes(fill=start), width=1/12) + geom_stratum(width = 1/12, fill = "black", color = "grey") +
+  geom_label(stat = "stratum", aes(label = after_stat(stratum)))
+
+
+```
+
+# Random forest classifier & validation cohort
+```{r}
+
+
+library(randomForestSRC)
+
+## create train & test data sets
+df <- genus %>% left_join(genecounts_vst)  # merge microbiome data (genus-level) and gene counts (vst transformed)
+rownames(df) <- df$sample
+df <- subset(df, select=-c(sample))
+df <- merge(cluster, df, by="row.names") # merge cluster assignments
+rownames(df) <- df$Row.names
+df <- subset(df, select=-1)
+df <- df %>%  mutate(cluster_factor = case_when(cluster==1 ~ "one", cluster==2 ~ "two", cluster==3 ~ "three", cluster==4 ~ "four"))
+df <- subset(df, select=-c(cluster))
+df$cluster_factor <- as.factor(df$cluster_factor)
+
+
+
+## assign weights to clusters since there is class imbalance
+weights <- df %>%  mutate(weights = case_when(cluster_factor=="one" ~ 1, cluster_factor=="two" ~ 1, cluster_factor=="three" ~ 1.5, cluster_factor=="four" ~ 1.5))
+
+
+## build the forest
+v.obj <- rfsrc(cluster_factor ~ ., data=df, case.wt=weights$weights, splitrule="auc", ntree=10000)
+print(v.obj)
+get.auc(df$cluster_factor, v.obj$predicted.oob)
+plot(get.tree(v.obj, 3))
+
+
+## identify variable importance
+vimp_default <- vimp(v.obj)
+vimp_brier <- vimp(v.obj, perf.type="brier")
+vimp_importance <- as.data.frame(print(vimp$importance))
+write.csv(vimp_importance, "vimp_importance_101523.csv")  # variable importance scores are available as supplemental data files
+vimp_importance_brier <- as.data.frame(print(vimp_brier$importance))
+write.csv(vimp_importance_brier, "vimp_importance_brier_101523.csv") # variable importance scores are available as supplemental data files
+plot(vimp)
+
+
+## test RF on data set 2
+utrecht_genecounts <- read.csv("utrecht_genecounts_vst.csv", header=TRUE, row.names=1, check.names=FALSE)
+utrecht_genus <- read.csv("utrecht_genus.csv", header=TRUE, row.names=1, check.names=FALSE)
+utrecht <- merge(utrecht_genecounts, utrecht_genus, by="row.names")
+rownames(utrecht) <- utrecht$sample
+utrecht <- subset(utrecht, select=-1)
+o.pred <- predict(object = v.obj, utrecht)
+print(o.pred)
+print(head(o.pred$predicted))
+print(head(o.pred$class))
+
+utrecht_clusters <- as.data.frame(print(o.pred$class))
+utrecht_clusters_prob <- as.data.frame(print(o.pred$predicted))
+
+
+
+## plot survival in data set 2 according to RF-assigned clusters
+utrecht_clin_data <- read.csv("utrecht_clin_data.csv", header=TRUE, row.names=1, check.names=FALSE)
+utrecht_clin_data <- merge(utrecht_clusters, utrecht_clin, by="row.names")
+
+utrecht_clin_data %>% group_by(`print(o.pred$class)`) %>% summarise(count=n())
+tibble <- print(as_tibble(as.data.frame(utrecht_clin_data) %>% mutate(Cluster = utrecht_clin_data$`print(o.pred$class)`) %>% group_by(Cluster) %>% summarize_all(list(mean), na.rm=TRUE)))
+
+
+
+# repeat survival times by cluster using km_days and km_nrm as time-to-event and event variables
+
+
+```
+
