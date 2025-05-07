@@ -7,6 +7,7 @@
 **INSTRUCTIONS 1:**
 Navigate to "Data/derivation cohort" to download processed microbiome, gene expression, and clinical metadata files for the PTCTC cohort. Navigate to "Data/validation cohort" to download processed microbiome, gene expression, and clinical metadata files for the Utrecht cohort. Navigate to "R code" and open "github_analysis_code.Rmd" to open R markdown document containing code to regenerate analyses and figures.
 
+---------------------------------------------------------------------------
 
 **TITLE 2:** "Integrating Pulmonary and Systemic Transcriptomic Profiles to Characterize Lung Injury after Pediatric Hematopoietic Stem Cell Transplant"
 
