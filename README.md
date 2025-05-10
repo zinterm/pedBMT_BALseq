@@ -14,5 +14,4 @@ Navigate to "Data/derivation cohort" to download processed microbiome, gene expr
 **AUTHORS 2:** Emma M. Pearce, Erica Evans, Madeline Y. Mayday, Gustavo Reyes, Miriam R. Simon, Jacob Blum, Hanna Kim, Jessica Mu, Peter J. Shaw, Courtney M. Rowan, Jeffrey J. Auletta, Paul L. Martin, Caitlin Hurley, Erin M. Kreml, Muna Qayed, Hisham Abdel-Azim, Amy K. Keating, Geoffrey D.E. Cuvelier, Janet R. Hume, James S. Killinger, Kamar Godder, Rabi Hanna, Christine N. Duncan, Troy C. Quigg, Paul Castillo, Nahal R. Lalefar, Julie C. Fitzgerald, Kris M. Mahadeo, Prakash Satwani, Theodore B. Moore, Benjamin Hanisch, Aly Abdel-Mageed, Dereck B. Davis, Michelle P. Hudspeth, Greg A. Yanik, Michael A. Pulsipher, Christopher C. Dvorak, Joseph L. DeRisi, Matt S. Zinter on behalf of the Pediatric Transplantation and Cell Therapy Consortium 
 
 **INSTRUCTIONS 2:** 
-NEEDS SOME WORK CHECK IS CORRECT AT END
-Navigate to "Data2" to download processed microbiome, gene expression, and clinical metadata files. Navigate to "R code 2" and open "github_analysis_code.Rmd" to open R markdown document containing code to regenerate analyses and figures.
+Navigate to "Data2" to download source files. Navigate to "R code 2" and open "github_analysis_paired_samples.Rmd" to open R markdown document containing code to regenerate analyses and figures.
