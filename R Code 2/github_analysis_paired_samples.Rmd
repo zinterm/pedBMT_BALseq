@@ -1,0 +1,1319 @@
+---
+title: "github_analysis_paired_samples"
+author: "Emma"
+date: "2024-08-29"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+# Packages
+```{r}
+
+my_packages <- c("biomaRt", "car", "caret", "clusterProfiler", "cowplot", "data.table", "DESeq2", "DGCA", "dplyr", "dunn.test", "e1071", "edgeR", "EnhancedVolcano", "enrichplot", "factoextra", "GGally", "ggplot2", "ggridges", "ggupset", "gridExtra", "GSVA", "GSVAdata", "h2o", "Hmisc", "igraph", "lattice", "limma", "magrittr", "MASS", "matrixStats","MOFA2", "msigdbr", "pheatmap", "plot3D", "qusage", "ranger", "RColorBrewer", "reshape2", "Rfast", "rsample", "rstatix", "stats", "stringr", "svglite", "tidyr", "tidyverse", "umap", "visNetwork")
+
+lapply(my_packages, library, character.only = TRUE)
+
+my_packages <- c("glmnet", "pROC", "randomForest", "randomForestSRC", "vegan")
+
+lapply(my_packages, library, character.only = TRUE)
+
+
+```
+
+# Data QC & Prep
+```{r}
+#import the following processed files from pedBMT_BALseq/Data2:
+
+    # gene expression files: blood_count, bal_counts, combined_counts, blood_vst, bal_vst, combined_vst, 
+    # pathway expression files: blood_gsva, bal_gsva
+    # imputed cell fraction files: blood_fractions, bal_fractions
+    # clinical data files: metadata
+
+```
+
+
+
+#___________________________________________________
+
+#---- BAL v BLOOD ----
+## Diff Exp ACROSS BAL-vs-BLOOD
+```{r}
+
+type <- as.factor(metadata$type)
+sample_id <- as.factor(metadata$sample_id)
+
+design <- model.matrix(~type + sample_id)
+
+dge <- DGEList(counts = combined_count) #genes as rows
+dge <- calcNormFactors(dge)
+dge <- estimateDisp(dge, design)
+fit <- glmFit(dge, design, dispersion=dge$tagwise.dispersion)
+fit <- glmLRT(fit, coef=2)
+etable <- topTags(fit, n=nrow(dge))$table
+edgeR_degs <- etable[ which(etable$FDR < 0.05) ,] 
+
+### visualize results by Volcano
+
+p1 <- EnhancedVolcano(etable,
+                      lab=NA, #rownames(etable),
+                      x='logFC', 
+                      y='FDR', 
+                      pCutoff = 0.05, 
+                      pCutoffCol = 'FDR', 
+                      FCcutoff=1, 
+                      col = c('grey30', 'forestgreen', 'royalblue', 'red2'),
+                      colAlpha = 0.9,
+                      pointSize=1,
+                      xlim=c(-15,15),
+                      drawConnectors = FALSE, widthConnectors = 0.1,
+                      xlab=bquote(~Log[2]~ 'fold change'),
+                      ylab=bquote(~Log[10]~adjusted~italic(P)),
+                      title='BAL & Blood Transcriptomes',
+                      subtitle=NULL, 
+                      caption=NULL, 
+                      titleLabSize=8) + theme(legend.position = "none")
+
+p1 <- p1 + theme(text=element_text(family="Arial", size=8), axis.text.x = element_text(hjust = 1), line=element_line(size=1))
+p1        
+
+
+### visualize results by box-whisker
+
+#ensure that in combined_vst, rows are samples and cols are genes
+
+metadata$SFTPC <- combined_vst_t$SFTPC
+
+custom_theme <- theme(
+    panel.background = element_rect(fill = "white"),
+    panel.border = element_blank(),  # Remove default border
+    panel.grid = element_blank(),   # Remove grid lines if needed
+    axis.line.x.bottom = element_line(color = "black"),  # Bottom line
+    axis.line.y.left = element_line(color = "black"),    # Left line
+    axis.line.x.top = element_blank(),    # No top line
+    axis.line.y.right = element_blank(),  # No right line
+    axis.ticks.length = unit(3, "pt"),     # Optional: Adjust tick size
+    legend.position = "none"
+  )
+
+
+p1 <- ggplot(metadata, aes(x=as.factor(type), y=SFTPC, fill=as.factor(type))) + geom_violin(trim=TRUE, aes(fill=NULL), scale="width", width=0.5) + geom_boxplot(width=0.6, color="black", outlier.shape = NA) + geom_jitter(shape=16, position=position_jitter(0.15), size=0.5) + scale_fill_manual(name=c("BAL", "blood"), values = c("cornflowerblue", "brown3")) + custom_theme
+
+p1
+
+```
+
+
+
+
+
+
+
+## Diff Corr ACROSS BAL-vs-BLOOD (msigdb only)
+```{r}
+
+# Load in combined_gsva and metadata
+
+            
+# set comparison
+sampletype <- metadata$type
+
+
+design <- model.matrix(~sampletype + 0)
+colnames(design) = c("BAL", "Blood")
+
+# run 
+ddcor_res = ddcorAll(inputMat = gsva, design = design,
+  compare = c("BAL", "Blood"), adjust = "fdr", nPerm = 0, corrType="pearson")
+head(ddcor_res)
+
+ddcor_res1 <- ddcor_res[which(ddcor_res$pValDiff_adj<0.05),]
+
+
+## WHICH ONES ARE POSITIVELY CORR IN BAL NOT BLOOD?
+ddcor_res1_sub <- ddcor_res1[which(ddcor_res1$BAL_cor>=0.5),]
+ddcor_res1_sub <- ddcor_res1_sub[which(abs(ddcor_res1_sub$Blood_cor)<=0.1),]
+degs <- unique(c(ddcor_res1_sub$Gene1, ddcor_res1_sub$Gene2))      # 40 OF 50 PATHWAYS
+
+      
+## WHICH ONES ARE POSITIVELY CORR IN BLOOD NOT BAL?
+ddcor_res1_sub <- ddcor_res1[which(ddcor_res1$Blood_cor>=0.5),]
+ddcor_res1_sub <- ddcor_res1_sub[which(abs(ddcor_res1_sub$BAL_cor)<=0.1),]
+degs <- unique(c(ddcor_res1_sub$Gene1, ddcor_res1_sub$Gene2))      # 2 OF 50 PATHWAYS
+
+
+# PLOT
+custom_theme <- theme(
+    panel.background = element_rect(fill = "white", color= "black"),
+    panel.border = element_blank(),  # Remove default border
+    #panel.grid = element_blank(),   # Remove grid lines if needed
+    axis.line.x.bottom = element_line(color = "black"),  # Bottom line
+    axis.line.y.left = element_line(color = "black"),    # Left line
+    axis.line.x.top = element_blank(),    # No top line
+    axis.line.y.right = element_blank(),  # No right line
+    axis.ticks.length = unit(3, "pt"),     # Optional: Adjust tick size
+    legend.position = "none"
+  )
+
+
+
+p1 <- plotCors(inputMat = gsva, design = design, compare = c("BAL", "Blood"), geneA = "HALLMARK_HYPOXIA", geneB = "HALLMARK_INTERFERON_GAMMA_RESPONSE")  + custom_theme + scale_color_manual(name=c("BAL", "Blood"), values = c("cornflowerblue", "brown3"))
+p2 <- plotCors(inputMat = gsva, design = design, compare = c("BAL", "Blood"), geneA = "HALLMARK_DNA_REPAIR", geneB = "HALLMARK_E2F_TARGETS") + custom_theme + scale_color_manual(name=c("BAL", "Blood"), values = c("cornflowerblue", "brown3"))
+
+plot_grid(p1, p2, ncol=1, align="v")
+
+```
+
+
+
+
+
+#
+## Overall Correlation ACROSS BAL-vs-BLOOD 
+```{r}
+
+############  INDIVIDUAL GENES/GENESETS ############ 
+### Calculate pairwise Spearman correlation:
+
+# Use blood_vst and bal_vst for individual genes
+
+# Use combined_gsva for genesets
+  # For genesets:
+    # skip minimum variance step
+    # load in combined_gsva and split into bal and blood samples data frames 
+    # make sample names match each other
+    # add suffix _blood/_BAL to rownames of split df
+    # transpose split df (sample names as rows, genes as cols)
+
+
+# first subset combined_vst for genes present at a minimum variance in blood and also present at a minimum variance in bal
+bal_vst_filter <- filterGenes(bal_vst, filterTypes = c("central", "dispersion"), filterCentralType = "median", filterCentralPercentile = 0.2, filterDispersionType = "cv", filterDispersionPercentile = 0.2, sequential = TRUE)
+blood_vst_filter <- filterGenes(blood_vst, filterTypes = c("central", "dispersion"), filterCentralType = "median", filterCentralPercentile = 0.2, filterDispersionType = "cv", filterDispersionPercentile = 0.2, sequential = TRUE)
+
+bal_vst_filter <- bal_vst_filter[c(rownames(bal_vst_filter) %in% rownames(blood_vst_filter)), ]
+blood_vst_filter <- blood_vst_filter[c(rownames(blood_vst_filter) %in% rownames(bal_vst_filter)), ]
+
+combined_vst_filter <- combined_vst[c(rownames(combined_vst) %in% intersect(rownames(bal_vst_filter), rownames(blood_vst_filter))),]
+
+
+# Subset combined_vst_filter into two df (one for blood (blood_spear), one for bal (bal_spear)), make sample names match, ensure samples are rows and genes are cols
+
+     
+# Prepare to store results
+corr_results <- data.frame(column = character(), correlation = numeric(), p_value = numeric())
+
+# Loop through each column 
+# may take 4-5min
+
+for (col in colnames(bal_spear)) {
+  test_result <- cor.test(bal_spear[[col]], blood_spear[[col]], method = "spearman")  # Perform correlation test on corresponding columns
+  corr_results <- rbind(corr_results, data.frame(column = col, correlation = test_result$estimate, p_value = test_result$p.value))   # Store results
+  } 
+
+# add FDR adjustment
+corr_results$fdr <- p.adjust(corr_results$p_value, method="fdr")
+
+
+### what is the distribution of gene-gene correlations?
+hist(corr_results$correlation)
+
+p1 <- ggplot(corr_results, aes(x = correlation)) + scale_x_continuous(limits=c(-1,1)) + geom_histogram(binwidth = 0.005, fill="black") + theme_minimal() 
+p1
+
+
+## plot gene-gene correlations (or lack-thereof) for both genes and genesets
+# add _BAL and _blood suffixes to row names in bal/blood_vst
+# make all sample names the same
+# bind bal/blood_vst and make sure samples are rows, genes are cols
+
+custom_theme <- theme(
+    panel.background = element_rect(fill = "white", color= "black"),
+    #panel.border = element_blank(),  # Remove default border
+    panel.grid.major = element_line(color="lightgray"),   # Remove grid lines if needed
+    axis.line = element_line(color = "black"),  # Bottom line
+    axis.ticks.length = unit(3, "pt"),     # Optional: Adjust tick size
+    legend.position = "none"
+  )
+
+p2 <- ggplot(df, aes(x = CXCL8_blood, y = CXCL8_BAL)) +
+  geom_point(position = position_dodge(width = 0.3), size = 1.5) + # position_dodge to avoid overlap
+  labs(title = "Expression of CXCL8 Gene", x = "blood gene expression", y = "BAL gene expression") +
+  custom_theme
+
+
+plot_grid(p1, p2, ncol=2, align="v")
+
+
+############ CELL TYPES ############ 
+
+# load in blood_fractions and bal_fractions
+# remove the P.value, Correlation, and RMSE cols
+# add _blood/_bal suffix to cell types (cols)
+
+rcorr <- rcorr(x=as.matrix(bal_cells), y=as.matrix(blood_cells), type="spearman")
+
+rcorr_final_spearman <- melt(rcorr$r)
+rcorr_final_punadj <- melt(rcorr$P)
+rcorr_final_spearman$p_unadj <- rcorr_final_punadj$value
+rcorr_final_spearman <- rcorr_final_spearman[grepl("BAL",rcorr_final_spearman$Var1),] #KEEP if has __ in var1
+rcorr_final_spearman <- rcorr_final_spearman[!grepl("BAL",rcorr_final_spearman$Var2),] #DISCARD if __ in var2
+rcorr_final_spearman$fdr <- p.adjust(rcorr_final_spearman$p_unadj, method="fdr")
+
+
+## visualize with heatmap
+rcorr_pheatmap <- cor(x=as.matrix(bal_cells), y=as.matrix(blood_cells), method="spearman")
+
+custom_order_rows <- c("Basal", "Ciliated", "Club", "Goblet", "AlveolarEpithelialType1", "AlveolarEpithelialType2", "Basophil_Mast", "Dendritic", "Monocyte", "Neutrophil", "B_cell", "CD4", "CD8", "NaturalKiller")
+rcorr_pheatmap <- rcorr_pheatmap[custom_order_rows, ]
+
+custom_order_columns <- c("Neutrophil", "Monocyte", "nonclassical_monocyte", "NaturalKiller", "B_cell", "CD4", "CD8", "GD_Tcell", "reg_Tcell", "platelet")
+rcorr_pheatmap <- rcorr_pheatmap[,custom_order_columns]
+
+brewer=rgb(colorRamp(c("blue", "white", "red"), space="rgb", interpolate="linear")(0:255/255), maxColorValue=255)
+breaksList = seq(-1, 1, by = 0.001)
+pheatmap(rcorr_pheatmap, color = colorRampPalette((brewer))(length(breaksList)), trace="none", cluster_rows=FALSE, cluster_cols=FALSE, breaks=breaksList, show_rownames=TRUE, clustering_distance_rows = "correlation", clustering_distance_columns = "correlation") 
+
+
+## plot cell-cell correlations (or lack-thereof)
+#merge blood_cells df and bal_cells df
+
+custom_theme <- theme(
+    panel.background = element_rect(fill = "white", color= "black"),
+    #panel.border = element_blank(),  # Remove default border
+    panel.grid.major = element_line(color="lightgray"),   # Remove grid lines if needed
+    axis.line = element_line(color = "black"),  # Bottom line
+    axis.ticks.length = unit(3, "pt"),     # Optional: Adjust tick size
+    legend.position = "none"
+  )
+
+p4 <- ggplot(df, aes(x = (Neutrophil_BAL), y = (Neutrophil_blood))) +
+  geom_point(position = position_dodge(width = 0.3), size = 1.5) + xlim(0,0.4) + # position_dodge to avoid overlap
+  labs(title = "Neutrophil Fraction", x = "blood gene expression", y = "BAL gene expression") +
+  custom_theme
+p4
+
+
+
+
+## plot imrep TCR correlations (or lack-thereof)
+
+imrep <- read.csv("combined_imrep_analysis_pairs_030725_sorted.csv", header = TRUE, row.names = NULL)
+m
+
+custom_theme <- theme(
+    panel.background = element_rect(fill = "white", color= "black"),
+    #panel.border = element_blank(),  # Remove default border
+    panel.grid.major = element_line(color="lightgray"),   # Remove grid lines if needed
+    axis.line = element_line(color = "black"),  # Bottom line
+    axis.ticks.length = unit(3, "pt"),     # Optional: Adjust tick size
+    legend.position = "none"
+  )
+
+p6 <- ggplot(imrep[which(imrep$Chain_Type=="TRA"),], aes(x = (Clonotype_count_BAL), y = (Clonotype_count_Blood))) +
+  geom_point(position = position_dodge(width = 0.3), size = 1.5) + # position_dodge to avoid overlap
+  labs(title = "TCR-Alpha Clonotypes", x = "blood gene expression", y = "BAL gene expression") +
+  custom_theme
+#p3 <- p3 + geom_smooth(method = "lm", se = FALSE, color = "red")
+p6
+
+cor.test(imrep[which(imrep$Chain_Type=="TRA"),]$Clonotype_count_BAL, imrep[which(imrep$Chain_Type=="TRA"),]$Clonotype_count_Blood, method="spearman") 
+
+plot_grid(p1, p2, p3, p4, p5, p6, ncol=3, align="v")
+
+```
+
+
+
+
+#___________________________________________________
+#---- BAL v BLOOD + OUTCOME ----
+## Diff Exp WITHIN BLOOD/BAL (by outcome)
+```{r}
+
+# subset metadata to only Blood and only the most recent samples (posthsct_bal_per_patient_inv==1)
+
+outcome <- as.factor(metadata_sub$outcome_dichot)
+
+design <- model.matrix(~outcome)
+
+dge <- DGEList(counts = df) #genes as rows
+dge <- calcNormFactors(dge)
+dge <- estimateDisp(dge, design)
+fit <- glmFit(dge, design, dispersion=dge$common.dispersion)
+fit <- glmLRT(fit, coef=2)
+etable <- topTags(fit, n=nrow(dge))$table
+
+p2 <- EnhancedVolcano(etable,
+                      lab=NA, #rownames(etable),
+                      x='logFC', 
+                      y='FDR', 
+                      pCutoff = 0.05, 
+                      pCutoffCol = 'FDR', 
+                      FCcutoff=0.5, 
+                      col = c('grey30', 'forestgreen', 'royalblue', 'red2'),
+                      colAlpha = 0.9,
+                      pointSize=1.25,
+                      #xlim=c(-15,15),
+                      drawConnectors = FALSE, widthConnectors = 0.1,
+                      xlab=bquote(~Log[2]~ 'fold change'),
+                      ylab=bquote(~Log[10]~adjusted~italic(P)),
+                      title='BAL & Blood Transcriptomes',
+                      subtitle=NULL, 
+                      caption=NULL, 
+                      titleLabSize=8) + theme(legend.position = "none")
+
+p2 <- p2 + theme(text=element_text(family="Arial", size=8), axis.text.x = element_text(hjust = 1), line=element_line(size=1))
+p2
+
+plot_grid(p1, p2, ncol=2, align="v")
+```
+
+
+
+
+
+
+
+## Diff Corr WITHIN BLOOD/BAL (by outcome)
+```{r}
+
+##### FILTER GENES #####
+
+# Load in blood_counts and blood_vst and metadata
+# subset metadata to sample ids found in blood_vst, sample type == blood, and most recent samples (posthsct_bal_per_patient_inv==1) (named metadata_sub here)
+
+blood_vst_filter <- filterGenes(blood_vst, filterTypes = c("central", "dispersion"), filterCentralType = "median", filterCentralPercentile = 0.2, filterDispersionType = "cv", filterDispersionPercentile = 0.2, sequential = TRUE)
+
+blood_counts_filtered <- blood_counts[rownames(blood_counts) %in% rownames(blood_vst_filter), ]
+blood_counts_filtered_NOIMPUTE <- blood_vst_filter
+blood_vst_filter$CHLA_002[blood_counts_filtered$CHLA_002 == 0] <- NA
+blood_vst_filter$SYDY_022[blood_counts_filtered$SYDY_022 == 0] <- NA
+
+df <- blood_vst_filter
+df <- df[, metadata_sub$sample_id]
+blood_counts_filtered_NOIMPUTE <- blood_counts_filtered_NOIMPUTE[, metadata_sub$sample_id]
+
+
+
+##### FIND DDCOR ####
+
+# set comparison
+outcome_dichot <- as.factor(metadata_sub$outcome_dichot)
+design <- model.matrix(~outcome_dichot + 0)
+colnames(design) = c("Live", "Die")
+       
+# run 
+cat("Starting process at:", format(Sys.time(), "%m-%d-%Y %H:%M:%S"), "\n")
+ddcor_res = ddcorAll(inputMat = df, design = design,
+  compare = c("Live", "Die"), sortBy="pValDiff", verbose=TRUE, impute=TRUE,
+  adjust = "fdr", nPerm = 0, corrType="pearson", nPairs = 1000000) # 
+cat("Process finished at:", format(Sys.time(), "%m-%d-%Y %H:%M:%S"), "\n")
+head(ddcor_res)
+
+
+ddcor_res1 <- ddcor_res[which(ddcor_res$pValDiff_adj<0.05),]
+ddcor_res1_sub <- ddcor_res1[which(ddcor_res1$Die_cor>=0.5),]
+ddcor_res1_sub <- ddcor_res1_sub[which(ddcor_res1_sub$Live_cor<=0.1),]
+head(ddcor_res1_sub)
+
+write.csv(ddcor_res1_sub, "ddcor_res_blood_livevsdie_011525_filt02_pearson_npair1e6_dieup.csv")
+      
+   
+# PLOT
+plotCors(inputMat = df, design = design, compare = c("Live", "Die"), geneA = "ZNF707", geneB = "BUB1B")
+plotCors(inputMat = df, design = design, compare = c("Live", "Die"), geneA = "GARRE1", geneB = "BCAM")
+plotCors(inputMat = df, design = design, compare = c("Live", "Die"), geneA = "TMEM86B", geneB = "CDK4")  
+
+ 
+
+##### MAKE NETWORK, FIND HUB GENES #####
+
+# Nodes
+nodes1 <- as.data.frame(ddcor_res1_sub[1])
+colnames(nodes1)[colnames(nodes1)=="Gene1"] <- "Gene"
+nodes2 <- as.data.frame(ddcor_res1_sub[2])
+colnames(nodes2)[colnames(nodes2)=="Gene2"] <- "Gene"
+nodes <- rbind(nodes1, nodes2)
+nodes <- nodes %>% dplyr::distinct(Gene, .keep_all = TRUE)
+colnames(nodes)[colnames(nodes)=="Gene"] <- "id"
+nodes$label <- nodes$id
+
+# Edges
+edges <- NULL
+edges <- as.data.frame(ddcor_res1_sub[1:2])
+edges$width <- ddcor_res1_sub$Die_cor #zScoreDiff
+colnames(edges) <- c("from", "to", "width")
+
+# Create graph for Louvain
+graph <- graph_from_data_frame(edges, directed = FALSE)
+
+# Structural properties of networks (like centrality)
+df_degree <- as.data.frame(degree(graph))
+rownames(df_degree) <- gsub("_blood", "", rownames(df_degree))
+
+hub_score <- hub_score(graph, scale = TRUE, weights = NULL, options = arpack_defaults())
+hub_score_vector <- as.data.frame(hub_score$vector)
+
+eigen_centrality <- eigen_centrality(graph, directed = FALSE, scale = TRUE, weights = NULL, options = arpack_defaults())
+eigen_centrality_vector <- as.data.frame(eigen_centrality$vector)
+
+hubnodes <- merge(df_degree, hub_score_vector, by="row.names")
+rownames(hubnodes) <- hubnodes$Row.names
+hubnodes <- subset(hubnodes, select=-1)
+hubnodes <- merge(hubnodes, eigen_centrality_vector, by="row.names")
+rownames(hubnodes) <- hubnodes$Row.names
+hubnodes <- subset(hubnodes, select=-1)
+
+
+
+
+##### PATHWAY ANALYSIS OF TOP HUB GENES #####
+
+# top hubs:
+ddcor_res1_sub_TMEM86B_HUB <- ddcor_res1_sub[ddcor_res1_sub$Gene1 == "TMEM86B" | ddcor_res1_sub$Gene2 == "TMEM86B", ]
+ddcor_res1_sub_TMEM86B_HUB_wedges <- unique(c(ddcor_res1_sub_TMEM86B_HUB$Gene1, ddcor_res1_sub_TMEM86B_HUB$Gene2))
+
+ddcor_res1_sub_ZNF707_HUB <- ddcor_res1_sub[ddcor_res1_sub$Gene1 == "ZNF707" | ddcor_res1_sub$Gene2 == "ZNF707", ]
+ddcor_res1_sub_ZNF707_HUB_wedges <- unique(c(ddcor_res1_sub_ZNF707_HUB$Gene1, ddcor_res1_sub_ZNF707_HUB$Gene2))
+
+ddcor_res1_sub_GARRE1_HUB <- ddcor_res1_sub[ddcor_res1_sub$Gene1 == "GARRE1" | ddcor_res1_sub$Gene2 == "GARRE1", ]
+ddcor_res1_sub_GARRE1_HUB_wedges <- unique(c(ddcor_res1_sub_GARRE1_HUB$Gene1, ddcor_res1_sub_GARRE1_HUB$Gene2))
+
+## Visualize with: ORA (Over-representation analysis, since we only have p-values, not LFC or directionality)
+##......method: hypergeometric (Fisher one-sided)
+##......visualize: bar, dotplot, network plot, tree, upset
+
+degs <- rownames(hubnodes)
+degs <- ddcor_res1_sub_TMEM86B_HUB_wedges
+degs <- ddcor_res1_sub_ZNF707_HUB_wedges
+degs <- ddcor_res1_sub_GARRE1_HUB_wedges
+
+
+m_df1 = msigdbr(species = "Homo sapiens", category = "H")
+m_df2 = msigdbr(species = "Homo sapiens", category = "C5", subcategory = "GO:BP")
+m_df3 = msigdbr(species = "Homo sapiens", category = "C2", subcategory = "CP:REACTOME")
+m_t2g1 = m_df1 %>% dplyr::select(gs_name, gene_symbol) %>% as.data.frame()
+m_t2g2 = m_df2 %>% dplyr::select(gs_name, gene_symbol) %>% as.data.frame()
+m_t2g3 = m_df3 %>% dplyr::select(gs_name, gene_symbol) %>% as.data.frame()
+m_t2g <- rbind(m_t2g1, m_t2g2)
+m_t2g <- rbind(m_t2g, m_t2g3)
+m_t2g$gs_name <- str_replace_all(m_t2g$gs_name, "_", " ")
+m_t2g$gs_name <- str_to_title(m_t2g$gs_name, locale="en")
+
+
+enrich_out <- enricher(gene = degs, TERM2GENE = m_t2g, pvalueCutoff = 0.05, qvalueCutoff=0.2, minGSSize=10, maxGSSize=300)
+head(enrich_out)
+
+dotplot(enrich_out, showCategory=100)
+
+# Save each enrich_out hub as a separate df, here it follows the theme HUB_pathway_sub
+
+ZNF707_pathway_sub <- ZNF707_pathway[1:5,]
+ZNF707_pathway_sub$ID <- substr(ZNF707_pathway_sub$ID, 1, 40)
+GARRE1_pathway_sub <- GARRE1_pathway[1:5,]
+GARRE1_pathway_sub$ID <- substr(GARRE1_pathway_sub$ID, 1, 40)
+TMEM86B_pathway_sub <- TMEM86B_pathway[1:5,]
+TMEM86B_pathway_sub$ID <- substr(TMEM86B_pathway_sub$ID, 1, 40)
+
+
+p1 <- ggplot(CEACAM6_pathway_sub, aes(x = Count, y = reorder(ID, Count), size=FoldEnrichment, color=p.adjust, fill=p.adjust)) + geom_point(shape = 21) + scale_size(limits = c(1,25), range=c(3,15)) + scale_fill_gradient(low = "red", high = "blue" , trans="log",limits=c(0.0000000000000000000000000000001, 0.05)) + scale_color_gradient(low = "red", high = "blue",trans="log",limits=c(0.0000000000000000000000000000001, 0.05)) +  theme_minimal() 
+
+p2 <- ggplot(CXCL17_pathway_sub, aes(x = Count, y = reorder(ID, Count), size=FoldEnrichment, color=p.adjust, fill=p.adjust)) + geom_point(shape = 21) + scale_size(limits = c(1,25), range=c(3,15)) + scale_fill_gradient(low = "red", high = "blue" , trans="log",limits=c(0.0000000000000000000000000000001, 0.05)) + scale_color_gradient(low = "red", high = "blue",trans="log",limits=c(0.0000000000000000000000000000001, 0.05)) + theme_minimal() 
+
+p3 <- ggplot(NFAM1_pathway_sub, aes(x = Count, y = reorder(ID, Count), size=FoldEnrichment, color=p.adjust, fill=p.adjust)) + geom_point(shape = 21) + scale_size(limits = c(1,25), range=c(3,15)) + scale_fill_gradient(low = "red", high = "blue" , trans="log",limits=c(0.0000000000000000000000000000001, 0.05)) + scale_color_gradient(low = "red", high = "blue",trans="log",limits=c(0.0000000000000000000000000000001, 0.05)) + theme_minimal() 
+
+plot_grid(p1, p2, p3, ncol=1, align="v")
+
+p5 <- ggplot(GARRE1_pathway_sub, aes(x = Count, y = reorder(ID, Count), size=FoldEnrichment, color=p.adjust, fill=p.adjust)) + geom_point(shape = 21) + scale_size(limits = c(1,25), range=c(3,15)) + scale_fill_gradient(low = "red", high = "blue" , trans="log",limits=c(0.0000000000000000000000000000001, 0.05)) + scale_color_gradient(low = "red", high = "blue",trans="log",limits=c(0.0000000000000000000000000000001, 0.05)) +  theme_minimal() 
+
+p6 <- ggplot(TMEM86B_pathway_sub, aes(x = Count, y = reorder(ID, Count), size=FoldEnrichment, color=p.adjust, fill=p.adjust)) + geom_point(shape = 21) + scale_size(limits = c(1,25), range=c(3,15)) + scale_fill_gradient(low = "red", high = "blue" , trans="log",limits=c(0.0000000000000000000000000000001, 0.05)) + scale_color_gradient(low = "red", high = "blue",trans="log",limits=c(0.0000000000000000000000000000001, 0.05)) + theme_minimal() 
+
+p4 <- ggplot(ZNF707_pathway_sub, aes(x = Count, y = reorder(ID, Count), size=FoldEnrichment, color=p.adjust, fill=p.adjust)) + geom_point(shape = 21) + scale_size(limits = c(1,25), range=c(3,15)) + scale_fill_gradient(low = "red", high = "blue" , trans="log",limits=c(0.0000000000000000000000000000001, 0.05)) + scale_color_gradient(low = "red", high = "blue",trans="log",limits=c(0.0000000000000000000000000000001, 0.05)) + theme_minimal() 
+
+plot_grid(p1, p2, p3, p4, p5, p6, ncol=1, align="v")
+
+
+```
+
+## Diff Corr ACROSS BAL-vs-BLOOD (by outcome)
+```{r}
+
+# Load in combined_gsva and metadata
+# Filter metadata to only recent samples
+# Subset combined_gsva to only have samples found in metadata
+# Split combined_gsva into blood and bal
+# Rename so sample names match
+# Add _blood or _BAL suffix to the geneset names
+# Merge df_bal and df_blood together (called df_merge here)
+
+
+# set comparison
+outcome_dichot <- as.factor(metadata_sub[1:166,]$outcome_dichot)
+design <- model.matrix(~outcome_dichot + 0)
+colnames(design) = c("Live", "Die")
+
+### run for all genes
+cat("Starting process at:", format(Sys.time(), "%m-%d-%Y %H:%M:%S"), "\n")
+ddcor_res = ddcorAll(inputMat = df_merge, design = design,
+  compare = c("Live", "Die"), sortBy="pValDiff", verbose=TRUE, impute=FALSE,
+  adjust = "fdr", nPerm = 0, corrType="pearson") 
+cat("Process finished at:", format(Sys.time(), "%m-%d-%Y %H:%M:%S"), "\n")
+head(ddcor_res)
+
+ddcor_res_1 <- ddcor_res %>% filter(grepl("_BAL", Gene1) & grepl("_blood", Gene2))
+
+
+
+### PLOT
+plotCors(inputMat = df_merge, design = design, compare = c("Live", "Die"), geneA = "HALLMARK_HYPOXIA_BAL", geneB = "HALLMARK_HYPOXIA_blood")
+plotCors(inputMat = df_merge, design = design, compare = c("Live", "Die"), geneA = "HALLMARK_INFLAMMATORY_RESPONSE_BAL", geneB = "HALLMARK_INFLAMMATORY_RESPONSE_blood")
+
+```
+
+
+
+
+#___________________________________________________
+#---- BAL v BLOOD + CLUSTER ----
+## Diff Exp WITHIN BLOOD (by C2 vs C1)
+```{r}
+
+# subset metadata to just blood, most recent samples, and just lung injury subtypes 1 and 2 (called "cluster" in metadata file)
+
+cluster <- as.factor(metadata_sub$cluster)
+design <- model.matrix(~cluster)
+
+dge <- DGEList(counts = df) #genes as rows
+dge <- calcNormFactors(dge)
+dge <- estimateDisp(dge, design)
+fit <- glmFit(dge, design, dispersion=dge$common.dispersion)
+fit <- glmLRT(fit, coef=2)
+etable <- topTags(fit, n=nrow(dge))$table
+edgeR_degs <- etable[ which(etable$FDR < 0.05) ,]
+
+# visualize
+# merge blood vst and meta:
+  # Subset metadata to only blood
+  # Transpose blood_vst (want samples as rows)
+  # Assign rownames of new blood_vst as new column in metadata (here called sample_id)
+  # Merge the two files together (combined file now named merge)
+
+ggplot(merge, aes(x=as.factor(cluster), y=IL1B)) + geom_violin(trim=TRUE) + geom_boxplot(width=0.3, color="blue",) + geom_jitter(shape=16, position=position_jitter(0.1)) + theme(legend.position="none", axis.title.x = element_blank())
+
+      
+# pathway analysis      
+geneList <- edgeR_degs[,1] # put LogFC here from edgeR output
+names(geneList) <- as.character(row.names(edgeR_degs)) # put gene SYMBOL here
+geneList = sort(geneList, decreasing = TRUE)
+
+
+m_df1 = msigdbr(species = "Homo sapiens", category = "H")
+m_df2 = msigdbr(species = "Homo sapiens", category = "C5", subcategory = "GO:BP")
+m_df3 = msigdbr(species = "Homo sapiens", category = "C2", subcategory = "CP:REACTOME")
+m_t2g1 = m_df1 %>% dplyr::select(gs_name, gene_symbol) %>% as.data.frame()
+m_t2g2 = m_df2 %>% dplyr::select(gs_name, gene_symbol) %>% as.data.frame()
+m_t2g3 = m_df3 %>% dplyr::select(gs_name, gene_symbol) %>% as.data.frame()
+m_t2g <- rbind(m_t2g1, m_t2g2)
+m_t2g <- rbind(m_t2g, m_t2g3)
+m_t2g$gs_name <- str_replace_all(m_t2g$gs_name, "_", " ")
+m_t2g$gs_name <- str_to_title(m_t2g$gs_name, locale="en")
+
+
+gse_msigdb <- GSEA(geneList, TERM2GENE = m_t2g, minGSSize = 10, maxGSSize = 300, pvalueCutoff = 0.05, pAdjustMethod = "BH",  by = "fgsea") 
+
+dotplot(gse_msigdb, showCategory=130)
+
+```
+
+
+
+
+
+## Diff Corr WITHIN BLOOD (by C2 vs C1)
+```{r}
+
+### Differential Correlation: Cluster 1 vs cluster 2 (in blood)
+### Repeat this for 1v3 and 1v4 and for bal
+
+# Load in blood_count, blood_vst, and metadata
+
+blood_vst_filter <- filterGenes(blood_vst, filterTypes = c("central", "dispersion"), filterCentralType = "median", filterCentralPercentile = 0.2, filterDispersionType = "cv", filterDispersionPercentile = 0.2, sequential = TRUE)
+
+# subset blood_count rownames to only rownames in blood_vst_filter (named df here)
+# copy blood_vst_filter to df named blood_counts_filtered_NOIMPUTE
+# subset metadata to only blood sample types, only sample ids found in blood_vst, remove any rows with cluster==NA (named metadata_sub here)
+# subset both df and blood_counts_filtered_NOIMPUTE to only cold found in the sample_id col in metadata
+
+
+
+##### FIND DDCOR #####
+
+# set comparison
+cluster <- as.factor(metadata_sub$cluster)
+design <- model.matrix(~cluster + 0)
+colnames(design) = c("C1", "C2", "C3", "C4")
+
+# run 
+cat("Starting process at:", format(Sys.time(), "%m-%d-%Y %H:%M:%S"), "\n")
+ddcor_res = ddcorAll(inputMat = df, design = design,
+  compare = c("C1", "C2"), sortBy="pValDiff", verbose=TRUE, impute=TRUE,
+  adjust = "fdr", nPerm = 0, corrType="pearson", nPairs = 1000000) # spearman pearson, 
+cat("Process finished at:", format(Sys.time(), "%m-%d-%Y %H:%M:%S"), "\n")
+head(ddcor_res)
+
+
+ddcor_res1 <- ddcor_res[which(ddcor_res$pValDiff_adj<0.05),]
+ddcor_res1_sub <- ddcor_res1[which(ddcor_res1$C2_cor>=0.5),]
+ddcor_res1_sub <- ddcor_res1_sub[which(ddcor_res1_sub$C1_cor<=0.1),]
+
+   
+# PLOT
+plotCors(inputMat = df, design = design, compare = c("C1", "C2"), geneA = "SLC25A12", geneB = "ZNF532")
+plotCors(inputMat = blood_counts_filtered_NOIMPUTE, design = design, compare = c("C1", "C2", "C3", "C4"), geneA = "SLC25A12", geneB = "ZNF532")
+
+
+
+##### MAKE NETWORK, FIND HUB GENES #####
+
+# Nodes (set "Gene" to your gene of interest)
+nodes1 <- as.data.frame(ddcor_res1_sub[1])
+colnames(nodes1)[colnames(nodes1)=="Gene1"] <- "Gene"
+nodes2 <- as.data.frame(ddcor_res1_sub[2])
+colnames(nodes2)[colnames(nodes2)=="Gene2"] <- "Gene"
+nodes <- rbind(nodes1, nodes2)
+nodes <- nodes %>% dplyr::distinct(Gene, .keep_all = TRUE)
+colnames(nodes)[colnames(nodes)=="Gene"] <- "id"
+nodes$label <- nodes$id
+
+# Edges
+edges <- NULL
+edges <- as.data.frame(ddcor_res1_sub[1:2])
+edges$width <- ddcor_res1_sub$C2_cor #zScoreDiff
+colnames(edges) <- c("from", "to", "width")
+
+# Create graph for Louvain
+graph <- graph_from_data_frame(edges, directed = FALSE)
+
+# Structural properties of networks (like centrality)
+df_degree <- as.data.frame(degree(graph))
+rownames(df_degree) <- gsub("_blood", "", rownames(df_degree))
+
+hub_score <- hub_score(graph, scale = TRUE, weights = NULL, options = arpack_defaults())
+hub_score_vector <- as.data.frame(hub_score$vector)
+
+eigen_centrality <- eigen_centrality(graph, directed = FALSE, scale = TRUE, weights = NULL, options = arpack_defaults())
+eigen_centrality_vector <- as.data.frame(eigen_centrality$vector)
+
+hubnodes <- merge(df_degree, hub_score_vector, by="row.names")
+rownames(hubnodes) <- hubnodes$Row.names
+hubnodes <- subset(hubnodes, select=-1)
+hubnodes <- merge(hubnodes, eigen_centrality_vector, by="row.names")
+rownames(hubnodes) <- hubnodes$Row.names
+hubnodes <- subset(hubnodes, select=-1)
+
+
+
+##### PATHWAY ANALYSIS OF TOP HUB GENES #####
+
+# top hubs: 
+ddcor_res1_sub_NUP210L_HUB <- ddcor_res1_sub[ddcor_res1_sub$Gene1 == "NUP210L" | ddcor_res1_sub$Gene2 == "NUP210L", ]
+ddcor_res1_sub_NUP210L_HUB_wedges <- unique(c(ddcor_res1_sub_NUP210L_HUB$Gene1, ddcor_res1_sub_NUP210L_HUB$Gene2))
+
+ddcor_res1_sub_COL6A6_HUB <- ddcor_res1_sub[ddcor_res1_sub$Gene1 == "COL6A6" | ddcor_res1_sub$Gene2 == "COL6A6", ]
+ddcor_res1_sub_COL6A6_HUB_wedges <- unique(c(ddcor_res1_sub_COL6A6_HUB$Gene1, ddcor_res1_sub_COL6A6_HUB$Gene2))
+
+ddcor_res1_sub_CDH13_HUB <- ddcor_res1_sub[ddcor_res1_sub$Gene1 == "CDH13" | ddcor_res1_sub$Gene2 == "CDH13", ]
+ddcor_res1_sub_CDH13_HUB_wedges <- unique(c(ddcor_res1_sub_CDH13_HUB$Gene1, ddcor_res1_sub_CDH13_HUB$Gene2))
+
+## Visualize with: ORA (Over-representation analysis, since we only have p-values, not LFC or directionality)
+##......method: hypergeometric (Fisher one-sided)
+##......visualize: bar, dotplot, network plot, tree, upset
+
+degs <- rownames(hubnodes)
+degs <- ddcor_res1_sub_NUP210L_HUB_wedges
+degs <- ddcor_res1_sub_COL6A6_HUB_wedges
+degs <- ddcor_res1_sub_CDH13_HUB_wedges
+
+
+m_df1 = msigdbr(species = "Homo sapiens", category = "H")
+m_df2 = msigdbr(species = "Homo sapiens", category = "C5", subcategory = "GO:BP")
+m_df3 = msigdbr(species = "Homo sapiens", category = "C2", subcategory = "CP:REACTOME")
+m_t2g1 = m_df1 %>% dplyr::select(gs_name, gene_symbol) %>% as.data.frame()
+m_t2g2 = m_df2 %>% dplyr::select(gs_name, gene_symbol) %>% as.data.frame()
+m_t2g3 = m_df3 %>% dplyr::select(gs_name, gene_symbol) %>% as.data.frame()
+m_t2g <- rbind(m_t2g1, m_t2g2)
+m_t2g <- rbind(m_t2g, m_t2g3)
+m_t2g$gs_name <- str_replace_all(m_t2g$gs_name, "_", " ")
+m_t2g$gs_name <- str_to_title(m_t2g$gs_name, locale="en")
+
+
+enrich_out <- enricher(gene = degs, TERM2GENE = m_t2g, pvalueCutoff = 0.05, qvalueCutoff=0.2, minGSSize=10, maxGSSize=500)
+head(enrich_out)
+
+enrich_out_df <- as.data.frame(enrich_out)
+
+```
+
+## Diff Corr ACROSS BAL-vs-BLOOD (by C2 vs C1)
+```{r}
+
+### Differential Correlation: Cluster 1 vs cluster 2 
+### Repeat this for 1v3 and 1v4
+
+# Load in blood_vst, bal_vst, combined_vst, and metadata
+
+##### Fileter Genes #####
+
+bal_vst_filter <- filterGenes(bal_vst, filterTypes = c("central", "dispersion"), filterCentralType = "median", filterCentralPercentile = 0.2, filterDispersionType = "cv", filterDispersionPercentile = 0.2, sequential = TRUE)
+
+blood_vst_filter <- filterGenes(blood_vst, filterTypes = c("central", "dispersion"), filterCentralType = "median", filterCentralPercentile = 0.2, filterDispersionType = "cv", filterDispersionPercentile = 0.2, sequential = TRUE)
+
+# Subset bal_vst_filter to only rows in blood_vst_filter and visa versa for subsetting blood_vst_filter
+# Subset combined_vst_filter to the intersection of rownames in bal_vst_filter and blood_vst_filter
+
+df <- as.data.frame(combined_vst_filter)
+
+
+# Filter metadata for rownames in colnames of combined vst, remove any rows with cluster==NA (called metadata_sub)
+# Subset df to only cols that mathc rownames of metadata_sub
+# Make df_blood and df_bal from df
+# Make colnames of df_blood and df_bal match
+# Add _blood and _BAL suffixes to rownames of both df (should be genes)
+# Merge df_blood and df_bal (called df_merge here)
+
+# set comparison
+cluster <- as.factor(metadata_sub[1:210,]$cluster)
+design <- model.matrix(~cluster + 0)
+colnames(design) = c("C1", "C2", "C3", "C4")
+
+### run for all genes
+cat("Starting process at:", format(Sys.time(), "%m-%d-%Y %H:%M:%S"), "\n")
+ddcor_res = ddcorAll(inputMat = df_merge, design = design,
+  compare = c("C1", "C2"), sortBy="pValDiff", verbose=TRUE, impute=FALSE,
+  adjust = "fdr", nPerm = 0, corrType="pearson", nPairs = 100000000) # spearman pearson, 
+cat("Process finished at:", format(Sys.time(), "%m-%d-%Y %H:%M:%S"), "\n")
+head(ddcor_res)
+
+ddcor_res$Gene1_ifBAL <- substr(ddcor_res$Gene1, 1, nchar(ddcor_res$Gene1) - 4)
+ddcor_res$Gene1_ifblood <- substr(ddcor_res$Gene1, 1, nchar(ddcor_res$Gene1) - 6)
+ddcor_res$Gene2_ifBAL <- substr(ddcor_res$Gene2, 1, nchar(ddcor_res$Gene2) - 4)
+ddcor_res$Gene2_ifblood <- substr(ddcor_res$Gene2, 1, nchar(ddcor_res$Gene2) - 6)
+
+ddcor_res <- ddcor_res[which(ddcor_res$pValDiff<0.05),]
+            
+ddcor_res_1 <- ddcor_res %>% filter(grepl("_BAL", Gene1) & grepl("_blood", Gene2))
+ddcor_res_2 <- ddcor_res %>% filter(grepl("_blood", Gene1) & grepl("_BAL", Gene2))
+ddcor_res_3 <- ddcor_res %>% filter(grepl("_blood", Gene1) & grepl("_blood", Gene2))
+ddcor_res_4 <- ddcor_res %>% filter(grepl("_BAL", Gene1) & grepl("_BAL", Gene2))
+
+ddcor_res_1_filter <- ddcor_res_1[which(ddcor_res_1$pValDiff<0.05),]
+ddcor_res_2_filter <- ddcor_res_2[which(ddcor_res_2$pValDiff<0.05),]
+ddcor_res_3_filter <- ddcor_res_3[which(ddcor_res_3$pValDiff<0.05),]
+ddcor_res_4_filter <- ddcor_res_4[which(ddcor_res_4$pValDiff<0.05),]
+
+
+ddcor_res_1_filter_sub <- ddcor_res_1_filter[which(ddcor_res_1_filter$C2_cor>=0.5),]
+ddcor_res_1_filter_sub <- ddcor_res_1_filter_sub[which(ddcor_res_1_filter_sub$C1_cor<=0.1),]
+ddcor_res_1_filter_sub <- ddcor_res_1_filter_sub[which(ddcor_res_1_filter_sub$pValDiff_adj<=0.05),]
+
+
+# remove suffices, relabel col1 and col2
+
+ddcor_res_1$Gene1 <- substr(ddcor_res_1$Gene1, 1, nchar(ddcor_res_1$Gene1) - 4)
+ddcor_res_1$Gene2 <- substr(ddcor_res_1$Gene2, 1, nchar(ddcor_res_1$Gene2) - 6)
+
+ddcor_res_1 <- ddcor_res_1 %>% rename(Gene_BAL = Gene1)
+ddcor_res_1 <- ddcor_res_1 %>% rename(Gene_Blood = Gene2)
+
+
+
+### PLOT
+plotCors(inputMat = df_merge, design = design, compare = c("Live", "Die"), geneA = "IL1B_BAL", geneB = "XG_blood")
+plotCors(inputMat = df_merge, design = design, compare = c("Live", "Die"), geneA = "TUFM_BAL", geneB = "CEP78_blood")
+plotCors(inputMat = df_merge, design = design, compare = c("Live", "Die"), geneA = "TUFM_BAL", geneB = "SLAMF6_blood")
+plotCors(inputMat = df_merge, design = design, compare = c("Live", "Die"), geneA = "MYPOP_BAL", geneB = "CELF3_blood")
+  
+ 
+# HEATMAP
+ddcor_res = ddcorAll(inputMat = df, design = design,
+  compare = c("BAL", "Nasal"),
+  adjust = "none", heatmapPlot = TRUE, nPerm = 0, nPairs = "all", corrType="spearman")
+      
+  
+ 
+##### MAKE NETWORK, FIND HUB GENES #####
+          
+ddcor_res1_sub <- ddcor_res_1_filter_sub
+
+# Nodes
+nodes1 <- as.data.frame(ddcor_res1_sub[1])
+colnames(nodes1)[colnames(nodes1)=="Gene1"] <- "Gene"
+nodes2 <- as.data.frame(ddcor_res1_sub[2])
+colnames(nodes2)[colnames(nodes2)=="Gene2"] <- "Gene"
+nodes <- rbind(nodes1, nodes2)
+nodes <- nodes %>% dplyr::distinct(Gene, .keep_all = TRUE)
+colnames(nodes)[colnames(nodes)=="Gene"] <- "id"
+nodes$label <- nodes$id
+
+# Edges
+edges <- NULL
+edges <- as.data.frame(ddcor_res1_sub[1:2])
+edges$width <- ddcor_res1_sub$C2_cor #zScoreDiff
+colnames(edges) <- c("from", "to", "width")
+
+# Create graph for Louvain
+graph <- graph_from_data_frame(edges, directed = FALSE)
+
+# Structural properties of networks (like centrality)
+df_degree <- as.data.frame(degree(graph))
+#rownames(df_degree) <- gsub("_blood", "", rownames(df_degree))
+
+hub_score <- hub_score(graph, scale = TRUE, weights = NULL, options = arpack_defaults())
+hub_score_vector <- as.data.frame(hub_score$vector)
+
+eigen_centrality <- eigen_centrality(graph, directed = FALSE, scale = TRUE, weights = NULL, options = arpack_defaults())
+eigen_centrality_vector <- as.data.frame(eigen_centrality$vector)
+
+hubnodes <- merge(df_degree, hub_score_vector, by="row.names")
+rownames(hubnodes) <- hubnodes$Row.names
+hubnodes <- subset(hubnodes, select=-1)
+hubnodes <- merge(hubnodes, eigen_centrality_vector, by="row.names")
+rownames(hubnodes) <- hubnodes$Row.names
+hubnodes <- subset(hubnodes, select=-1)
+
+
+
+##### PATHWAY ANALYSIS OF TOP HUB GENES #####
+
+ddcor_res1_sub_CYBAblood_HUB <- ddcor_res1_sub[ddcor_res1_sub$Gene1 == "CYBA_blood" | ddcor_res1_sub$Gene2 == "CYBA_blood", ]
+ddcor_res1_sub_CYBAblood_HUB_wedges <- unique(c(ddcor_res1_sub_CYBAblood_HUB$Gene1, ddcor_res1_sub_CYBAblood_HUB$Gene2))
+
+ddcor_res1_sub_TUFMbal_HUB <- ddcor_res1_sub[ddcor_res1_sub$Gene1 == "TUFM_BAL" | ddcor_res1_sub$Gene2 == "TUFM_BAL", ]
+ddcor_res1_sub_TUFM_bal_HUB_wedges <- unique(c(ddcor_res1_sub_TUFMbal_HUB$Gene1, ddcor_res1_sub_TUFMbal_HUB$Gene2))
+
+ddcor_res1_sub_GARRE1_HUB <- ddcor_res1_sub[ddcor_res1_sub$Gene1 == "GARRE1" | ddcor_res1_sub$Gene2 == "GARRE1", ]
+ddcor_res1_sub_GARRE1_HUB_wedges <- unique(c(ddcor_res1_sub_GARRE1_HUB$Gene1, ddcor_res1_sub_GARRE1_HUB$Gene2))
+
+ddcor_res1_sub_APOOL_HUB <- ddcor_res1_sub[ddcor_res1_sub$Gene1 == "APOOL" | ddcor_res1_sub$Gene2 == "APOOL", ]
+ddcor_res1_sub_APOOL_HUB_wedges <- unique(c(ddcor_res1_sub_APOOL_HUB$Gene1, ddcor_res1_sub_APOOL_HUB$Gene2))
+
+
+ddcor_res4_TUFM <- ddcor_res_4[ddcor_res_4$Gene1 == "TUFM_BAL" | ddcor_res_4$Gene2 == "TUFM_BAL", ]
+
+
+## Visualize with: ORA (Over-representation analysis, since we only have p-values, not LFC or directionality)
+##......method: hypergeometric (Fisher one-sided)
+##......visualize: bar, dotplot, network plot, tree, upset
+
+
+degs <- rownames(hubnodes)
+degs <- ddcor_res1_sub_CYBAblood_HUB$Gene1_ifBAL
+
+m_df1 = msigdbr(species = "Homo sapiens", category = "H")
+m_df2 = msigdbr(species = "Homo sapiens", category = "C5", subcategory = "GO:BP")
+m_df3 = msigdbr(species = "Homo sapiens", category = "C2", subcategory = "CP:REACTOME")
+        
+m_t2g1 = m_df1 %>% dplyr::select(gs_name, gene_symbol) %>% as.data.frame()
+m_t2g2 = m_df2 %>% dplyr::select(gs_name, gene_symbol) %>% as.data.frame()
+m_t2g3 = m_df3 %>% dplyr::select(gs_name, gene_symbol) %>% as.data.frame()
+
+m_t2g <- rbind(m_t2g1, m_t2g2)
+m_t2g <- rbind(m_t2g, m_t2g3)
+
+m_t2g$gs_name <- str_replace_all(m_t2g$gs_name, "_", " ")
+m_t2g$gs_name <- str_to_title(m_t2g$gs_name, locale="en")
+
+enrich_out <- enricher(gene = degs, TERM2GENE = m_t2g, pvalueCutoff = 0.25, minGSSize=10, maxGSSize=1500)
+head(enrich_out)
+
+enrich_out_df <- as.data.frame(enrich_out)
+
+enrich_out_simple <- pairwise_termsim(enrich_out)
+
+
+
+##### Plot #####
+
+barplot(enrich_out)
+dotplot(enrich_out, showCategory=100)
+cnetplot(enrich_out, node_label="category")
+
+cnetplot(enrich_out, node_label="category", categorySize="pvalue", colorEdge=FALSE, cex.params=list(category_label=0.7, gene_label=0.6), showCategory=50, max.overlaps=3500) # + scale_color_gradientn(colors=c("blue","blue","white","red","red")) # foldChange=(slope_hypertgc1-slope_hypertgc2)
+
+cnetplot(enrich_out_simple, node_label="category", categorySize="pvalue", colorEdge=FALSE, cex.params=list(category_label=0.7, gene_label=0.6), showCategory=500, max.overlaps=3500) # + scale_color_gradientn(colors=c("blue","blue","white","red","red")) # foldChange=(slope_hypertgc1-slope_hypertgc2)
+
+
+plot_grid(p1, p2, ncol=2, align="v")
+
+treeplot(enrich_out)
+emapplot(enrich_out_simple, cex_label_category=0.5)
+
+upsetplot(enrich_out)
+
+barplot(enrich_out_simple)
+dotplot(enrich_out_simple, showCategory=100)
+cnetplot(enrich_out_simple, node_label="category")
+treeplot(enrich_out_simple)
+emapplot(enrich_out_simple, cex_label_category=0.7)
+upsetplot(enrich_out_simple)
+
+
+```
+
+
+#___________________________________________________
+#---- MOFA ----
+## MOFA model
+```{r}
+
+# Load in bal_vst, blood_vst, and metadata
+# Subset metadata to sample ids in bal_vst, remove any cluster == NA, subset to only bal sample types
+# Filter both vst df:
+
+bal_vst_filter <- filterGenes(bal_vst, filterTypes = c("central", "dispersion"), filterCentralType = "median", filterCentralPercentile = 0.2, filterDispersionType = "cv", filterDispersionPercentile = 0.2, sequential = TRUE)
+blood_vst_filter <- filterGenes(blood_vst, filterTypes = c("central", "dispersion"), filterCentralType = "median", filterCentralPercentile = 0.2, filterDispersionType = "cv", filterDispersionPercentile = 0.2, sequential = TRUE)
+
+
+z <- list(as.matrix(bal_vst_filter), as.matrix(blood_vst_filter))
+names(z) <- c("BAL", "Blood") # features are ROWS, samples are COLUMNS
+
+
+
+## create & train the MOFA
+
+MOFAobject <- create_mofa(z) 
+MOFAobject
+plot_data_overview(MOFAobject)
+
+data_opts <- get_default_data_options(MOFAobject)
+
+MOFAobject <- prepare_mofa(MOFAobject, data_options= data_opts)
+MOFAobject
+
+MOFAobject <- run_mofa(MOFAobject, use_basilisk=TRUE)
+MOFAobject
+
+slotNames(MOFAobject)
+names(MOFAobject@data)
+names(MOFAobject@expectations)
+
+plot_factor_cor(MOFAobject)
+plot_variance_explained(MOFAobject, max_r2=15)
+plot_variance_explained(MOFAobject, plot_total = T)[[2]]
+
+samples_metadata(MOFAobject) <- metadata_sub
+
+## correlation between MOFA factors and clinical variables **NOTE -- WILL NOT DETECT NON-LINEAR TRENDS
+correlate_factors_with_covariates(MOFAobject, covariates = c("age_at_study_years", "hsct_to_study_days", "spo2_support_dichot", "vfd28"), abs=FALSE, plot="r", col.lim=c(-0.5,0.5))
+
+plot_factor(MOFAobject, factors = 1, color_by = "Factor1")
+plot_factor(MOFAobject, factors = 1:8, color_by = "outcome_dichot", add_violin = TRUE, dodge = TRUE)
+
+plot_factors(MOFAobject, factors = 1:5, color_by = "outcome_dichot")
+
+
+
+## factor influences
+#get_weights(MOFAobject)
+
+    ## authors recommend to always scale = TRUE
+plot_weights(MOFAobject, view = "BAL", factor = 1, nfeatures = 10, scale = T)
+plot_weights(MOFAobject, view = "Blood", factor = 1, nfeatures = 10, scale = T)
+plot_weights(MOFAobject, view = c("BAL", "Blood"), factor = 6, nfeatures = 10, scale = T)
+plot_top_weights(MOFAobject, view = c("BAL", "Blood"), factor = 1, nfeatures = 5, scale = T)
+
+
+plot_data_scatter(MOFAobject, view = "BAL", factor = 1,  features = 6, sign = "all", color_by = "vfd28") + labs(y="BAL Genes)")
+
+
+## this will make most sense to pick variables that are related to that factor
+plot_data_heatmap(MOFAobject, view = "BAL", factor = 1,  features = 25, cluster_rows = TRUE, cluster_cols = TRUE, show_rownames = TRUE, show_colnames = FALSE, scale = "row", denoise = TRUE)
+
+plot_data_heatmap(MOFAobject, view = "Blood", factor = 2,  features = 25, cluster_rows = TRUE, cluster_cols = TRUE, show_rownames = TRUE, show_colnames = FALSE, scale = "row", denoise = TRUE)
+
+
+
+## plot patients according to factors in 2-D
+plot_factors(MOFAobject, factors = c(1,2), dot_size = 2.5, show_missing = T)
+
+mofa_factors <- as.data.frame(MOFAobject@expectations[["Z"]][["group1"]])
+write.csv(mofa_factors, "mofa_factors_032425.csv")
+
+weights <- get_weights(MOFAobject, views = "all", factors = "all")
+weights_BAL <- as.data.frame(t(weights$BAL))
+weights_Blood <- as.data.frame(t(weights$Blood))
+
+
+## MAKE UMAP
+umap <- run_umap(MOFAobject, n_neighbors = 40, min_dist=0, n_components=15, negative_sample_rate=45, verbose=FALSE) #negative_sample_rate=45,
+practice <- as.data.frame(umap@dim_red[["UMAP"]])
+
+
+## PLOT IN 2D
+ggplot(practice[-1]) + geom_point(aes(x=UMAP1, y=UMAP2))
+ggplot(practice[-1]) + geom_point(aes(x=UMAP1, y=UMAP3)) 
+ggplot(practice[-1]) + geom_point(aes(x=UMAP2, y=UMAP3)) 
+
+## PLOT IN 3D
+## scatter3D is part of plot3D ## pch = point type (16=circle), cex = point size, bty = type of background, alpha = transparency, theta & phi = viewing direction
+library(plot3D)
+scatter3D(x=practice$UMAP1*-1, y= practice$UMAP2*-1, z=practice$UMAP3, colvar=NULL, alpha=0.5, bty="g", pch=16, cex=1, phi=15, xlab="UMAP1", ylab="UMAP2", zlab="UMAP3")
+
+#scatter3D(x=mofa_factors$Factor1, y= mofa_factors$Factor2, z=mofa_factors$Factor3, colvar=NULL, alpha=0.5, bty="g", pch=16, cex=1, phi=15, xlab="UMAP1", ylab="UMAP2", zlab="UMAP3")
+
+
+## DETERMINE IDEAL # CLUSTERS
+fviz_nbclust(practice[-1], kmeans, method = "wss") ### Elbow method:
+fviz_nbclust(practice[-1], kmeans, method = "silhouette") ### Silhouette method
+
+
+## MAKE CLUSTERS
+clust <- kmeans(practice[2:4], centers = 2, nstart = 25)
+clust <- kmeans(practice[-1], centers = 2, nstart = 25)
+total_cluster <- as.data.frame(clust$cluster)
+colnames(total_cluster)[1] <- "cluster_BAL_Blood"
+
+
+
+practice_merge <- merge(practice, total_cluster, by="row.names")
+rownames(practice_merge) <- practice_merge$Row.names
+practice_merge <- subset(practice_merge, select=-1)
+rownames(metadata_sub) <- metadata_sub$sample_id
+practice_merge <- merge(practice_merge, metadata_sub, by="row.names")
+rownames(practice_merge) <- practice_merge$Row.names
+practice_merge <- subset(practice_merge, select=-1)
+
+scatter3D(practice_merge$UMAP1,practice_merge$UMAP2,practice_merge$UMAP3, colvar=as.numeric(practice_merge$cluster_BAL_Blood), pch=16, cex=1, alpha=0.5, bty="b2", phi=10, theta=25, xlab="UMAP1", ylab="UMAP2", zlab="UMAP3", col=c("orange", "blue"))
+
+
+scatter3D(practice_merge$UMAP1,practice_merge$UMAP2,practice_merge$UMAP3, colvar=as.numeric(practice_merge$cluster), pch=16, cex=1, alpha=0.5, bty="b2", phi=20, theta=25, xlab="UMAP1", ylab="UMAP2", zlab="UMAP3", col=c("#F8766D", "#7CAE00", "#00BFC4", "#C77CFF"))
+
+
+
+# clin data
+
+rownames(metadata_sub) <- metadata_sub$sample_id
+df_new <- merge(metadata_sub, total_cluster, by="row.names")
+rownames(df_new) <- df_new$Row.names
+df_new <- subset(df_new, select=-1)            
+
+df_new$vfd28[is.na(df_new$vfd28)] <- 0
+
+table(df_new$cluster, df_new$cluster_BAL_Blood)
+
+table(df_new$sex, df_new$cluster_BAL_Blood)
+chisq.test(df_new$sex, df_new$cluster_BAL_Blood, correct=FALSE)
+
+wilcox.test(vfd28 ~ cluster_BAL_Blood, data = df_new)
+kruskal.test(vfd28 ~ cluster_BAL_Blood, data = df_new)
+
+df_new$vfd7 <- df_new$vfd28
+df_new$vfd7[df_new$vfd7 < 21] <- 0 
+wilcox.test(vfd7 ~ cluster_BAL_Blood, data = df_new)
+
+df_new$extubalive_day7 <- df_new$vfd28
+df_new$extubalive_day7[df_new$extubalive_day7 <= 21] <- 0 
+df_new$extubalive_day7[df_new$extubalive_day7 > 21] <- 1
+table(df_new$extubalive_day7, df_new$cluster_BAL_Blood)
+chisq.test(df_new$extubalive_day7, df_new$cluster_BAL_Blood, correct=FALSE)
+
+
+kruskal.test(anc ~ cluster_BAL_Blood, data = df_new)
+kruskal.test(alc ~ cluster_BAL_Blood, data = df_new)
+
+table(df_new$spo2_support_dichot, df_new$cluster_BAL_Blood)
+chisq.test(df_new$spo2_support_dichot, df_new$cluster_BAL_Blood, correct=FALSE)
+
+table(df_new$spo2_support_trichot, df_new$cluster_BAL_Blood)
+chisq.test(df_new$spo2_support_trichot, df_new$cluster_BAL_Blood, correct=FALSE)
+
+table(df_new$picu, df_new$cluster_BAL_Blood)
+chisq.test(df_new$picu, df_new$cluster_BAL_Blood, correct=FALSE)
+
+table(df_new$ippv_24hr_min, df_new$cluster_BAL_Blood)
+chisq.test(df_new$ippv_24hr_min, df_new$cluster_BAL_Blood, correct=FALSE)
+    
+
+
+df_new2 <- df_new[which(df_new$posthsct_bal_per_patient_inv==1),]
+
+table(df_new2$cluster, df_new2$cluster_BAL_Blood)
+
+table(df_new2$outcome_dichot, df_new2$cluster_BAL_Blood)
+chisq.test(df_new2$outcome_dichot, df_new2$cluster_BAL_Blood, correct=FALSE)
+
+table(df_new2$death_in_28days, df_new2$cluster_BAL_Blood)
+chisq.test(df_new2$death_in_28days, df_new2$cluster_BAL_Blood, correct=FALSE)
+
+table(df_new2$picu, df_new2$cluster_BAL_Blood)
+chisq.test(df_new2$picu, df_new2$cluster_BAL_Blood, correct=FALSE)
+
+table(df_new2$ippv_24hr_min, df_new2$cluster_BAL_Blood)
+chisq.test(df_new2$ippv_24hr_min, df_new2$cluster_BAL_Blood, correct=FALSE)
+
+wilcox.test(vfd28 ~ cluster_BAL_Blood, data = df_new2)
+kruskal.test(vfd28 ~ cluster_BAL_Blood, data = df_new2)
+
+group_by(df_new2, as.factor(cluster_BAL_Blood)) %>% summarise(count=n(), median=median(vfd7, na.rm=TRUE), p25=quantile(vfd7, probs=0.25, na.rm=TRUE), p75=quantile(vfd7, probs=0.75, na.rm=TRUE))
+wilcox.test(vfd7 ~ cluster_BAL_Blood, data = df_new2)
+
+table(df_new2$extubalive_day7, df_new2$cluster_BAL_Blood)
+chisq.test(df_new2$extubalive_day7, df_new2$cluster_BAL_Blood, correct=FALSE)
+
+    ## conclusion -- vfd28 close to sig (p=0.089), death not
+
+write.csv(df_new, "df_new.csv")
+weights <- df_new %>%  mutate(alluvial = case_when(cluster_factor=="one" ~ 1, cluster_factor=="two" ~ 1, cluster_factor=="three" ~ 1.5, cluster_factor=="four" ~ 1.5))
+
+alluvial <- read.csv("alluvial.csv", header=TRUE, row.names=1, check.names=FALSE)
+
+library(ggalluvial)
+ggplot(alluvial, aes(axis1=start, axis2=end, y=freq)) + geom_alluvium(aes(fill=start), width=1/12) + geom_stratum(width = 1/12, fill = "black", color = "grey") + geom_label(stat = "stratum", aes(label = after_stat(stratum))) #+ scale_fill_brewer(type = "qual", palette = "Set1") 
+
+
+
+
+
+## CUMULATIVE INCIDENCE
+
+library(cmprsk)
+library(aod)
+library(survival)
+library(rms)
+
+source ("CumIncidence.R")
+source ("crr-addson.R")
+
+
+## STEP 1 - IMPORT DATA
+CI_data <- read.csv("cif_extubation_082623.csv", header=TRUE, row.names=1, check.names=FALSE)
+CI_data <- CI_data[order(rownames(CI_data)) ,]
+
+CI_data <- merge(CI_data, df_new2, by="row.names")
+
+## STEP 2 - DEFINE VARIABLES
+
+# ftime = time-to-event (time to death if died, time to relapse if relapsed, time to LFU if survived)
+
+df_new$vfd7[df_new$vfd7 < 21] <- 0 
+wilcox.test(vfd7 ~ cluster_BAL_Blood, data = df_new)
+
+df_new$extubalive_day7 <- df_new$vfd28
+df_new$extubalive_day7[df_new$extubalive_day7 <= 21] <- 0 
+df_new$extubalive_day7[df_new$extubalive_day7 > 21] <- 1
+
+CI_data$time_to_extub <- CI_data$vfd7
+hist(CI_data$time_to_extub)
+CI_data$time_to_extub[CI_data$time_to_extub <= 21] <- 7 
+CI_data$time_to_extub[CI_data$time_to_extub == 28] <- 0
+CI_data$time_to_extub[CI_data$time_to_extub == 27] <- 1
+CI_data$time_to_extub[CI_data$time_to_extub == 26] <- 2 
+CI_data$time_to_extub[CI_data$time_to_extub == 25] <- 3 
+CI_data$time_to_extub[CI_data$time_to_extub == 24] <- 4 
+CI_data$time_to_extub[CI_data$time_to_extub == 23] <- 5 
+CI_data$time_to_extub[CI_data$time_to_extub == 22] <- 6
+
+ftime <- CI_data$time_to_extub
+hist(ftime)
+
+ftime <- CI_data$ett_days
+ftime <- CI_data$piculos
+
+# status = variable containing the competing events (0 if survived, 1 if TRM, 2 if relapse, etc)
+CI_status <- factor(CI_data$km_extubated, levels=c(0,1), labels= c("Not extubated", "Extubated alive"))
+CI_status <- factor(CI_data$km_picudc, levels=c(0,1), labels= c("Not discharged from PICU alive", "Discharged from PICU alive"))
+       
+CI_status <- factor(CI_data$extubalive_day7, levels=c(0,1), labels= c("Not extubated", "Extubated alive"))
+
+
+# define factors
+
+#cluster <- factor(CI_data$cluster_063023, levels=c(1,2,3,4))          
+#cluster <- factor(CI_data$cluster_091523, levels=c(1,2,3,4)) 
+cluster <- factor(CI_data$cluster_BAL_Blood, levels=c(1,2)) 
+          
+   
+
+# define confounders
+#age <- factor(age_cat, levels=c(1,2,3,4), labels=c("0-1", "1-5", "5-12", "13+"))
+
+
+
+##############################################################################################################################
+
+## CUMULATIVE INCIDENCE FUNCTION
+
+CIF <- cuminc(ftime = ftime,
+              fstatus = CI_status, 
+              rho = 0)  #group = cluster4_v6, 
+
+CIF <- cuminc(ftime = ftime,
+              fstatus = CI_status, 
+              group = cluster, 
+              rho = 0)
+
+print.cuminc(CIF) ## this will give Fine & Gray's test of equality
+timepoints(CIF, times=c(100,150,200,365,730))
+
+timepoints(CIF, times=c(7,14,21,30,100))
+timepoints(CIF, times=c(7,14,21,30))
+plot.cuminc(CIF, ylim=c(0,1))
+
+
+## competing risks regression ## this will give subdistribution hazard ratios (SHRs)
+covariate_matrix <- factor2ind(cluster, 1) ## this "factor2ind" is provided by the crr-addson.R file
+
+CRR <- crr(ftime = ftime,
+           fstatus = CI_data$km_extubated,
+           cov1 = covariate_matrix,
+           failcode = 0) #put the outcome of interest here, ie: lung injury =1, NRM =2, fatal lung injury =1
+
+CRR <- crr(ftime = ftime,
+           fstatus = CI_data$km_picudc,
+           cov1 = covariate_matrix,
+           failcode = 0) #put the outcome of interest here, ie: lung injury =1, NRM =2, fatal lung injury =1
+
+CRR <- crr(ftime = ftime,
+           fstatus = CI_data$extubalive_day7,
+           cov1 = covariate_matrix,
+           failcode = 0) #put the outcome of interest here, ie: lung injury =1, NRM =2, fatal lung injury =1
+
+
+summary(CRR)
+
+
+```
+## Visualize
+```{r}
+
+# approach
+    # pick genes (edgeR, KW) or pathways (MSIGDB or GSVA based on edgeR hits?)
+    # plot individual level data (box-whisker, ridgeplot) or cluster averages (heatmap)
+
+# Repeat this for bal
+
+# load in blood_vst and metadata
+# Subset metadata to only type == blood (named metadata_sub here)
+# subset blood_vst for colnames in metadata_sub$sample_id, make sure samples are rows, genes are col
+
+table(total_cluster$cluster)
+cluster <- factor(total_cluster$cluster, levels=c(2,1))
+
+design <- model.matrix(~cluster)
+
+dge <- DGEList(counts = df) #genes as rows
+dge <- calcNormFactors(dge)
+dge <- estimateDisp(dge, design)
+fit <- glmFit(dge, design, dispersion=dge$tagwise.dispersion)
+fit <- glmLRT(fit, coef=2)
+etable <- topTags(fit, n=nrow(dge))$table
+edgeR_degs <- etable[ which(etable$FDR < 0.05) ,] 
+
+total_cluster$CDH7_blood <- blood_vst$CDH7
+total_cluster$IL33_blood <- blood_vst$IL33
+total_cluster$JCAD_blood <- blood_vst$JCAD
+
+ggplot(total_cluster, aes(x=as.factor(cluster), y=JCAD_blood, fill=as.factor(cluster))) + geom_violin(trim=TRUE, aes(fill=NULL), scale="width", width=0.5) + geom_boxplot(width=0.6, color="black", outlier.shape = NA) + geom_jitter(shape=16, position=position_jitter(0.15), size=0.5) + scale_fill_manual(name=c("BAL", "blood"), values = c("cornflowerblue", "brown3"))
+
+
+```
