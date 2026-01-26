@@ -15,3 +15,12 @@ Navigate to "Data/derivation cohort" to download processed microbiome, gene expr
 
 **INSTRUCTIONS 2:** 
 Navigate to "Data2" to download source files. Navigate to "R code 2" and open "github_analysis_paired_samples.Rmd" to open R markdown document containing code to regenerate analyses and figures.
+
+---------------------------------------------------------------------------
+
+**TITLE 3:** "Upper and Lower Respiratory Tract Compartmentalization in Pediatric Stem Cell Transplantation"
+
+**AUTHORS 3:** Erica M. Evans, Madeline Y. Mayday, Emma M. Pearce, Iwanaga K, Ly NP, Church GD, Gustavo Reyes, Miriam R. Simon, Jacob Blum, Hanna Kim, Jessica Mu, Jazmin Baez-Maidana, Jeffrey J. Auletta, Peter J. Shaw, Erin M. Kreml, Paul L. Martin, Christine N. Duncan, Courtney M. Rowan, Kamar Godder, Caitlin Hurley, Geoffrey D.E. Cuvelier, Muna Qayed, Hisham Abdel-Azim, Amy K. Keating, Julie C. Fitzgerald, Rabi Hanna, James S. Killinger, Janet R. Hume, Troy C. Quigg, Paul Castillo, Prakash Satwani, Theodore B. Moore, Christopher C. Dvorak, Matt S. Zinter on behalf of the Pediatric Transplantation and Cell Therapy Consortium 
+
+**INSTRUCTIONS 3:** 
+Navigate to "Data3" to download source files. Navigate to "R code 3" and open "github_analysis_paired_samples.Rmd" to open R markdown document containing code to regenerate analyses and figures.
