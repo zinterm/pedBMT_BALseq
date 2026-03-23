@@ -1,0 +1,18 @@
+sample_id,age_at_study_years,sex,race,ethnicity,region,spo2_support,Diagnosis
+healthy_001,1.20,Male,other_multiple,0,west,Nothing (room air),Tracheomalacia and bronchomalacia
+healthy_002,0.96,Male,unknown,0,west,Nothing (room air),Obstructive sleep apnea
+healthy_003,0.27,Male,white,0,west,Nothing (room air),Wheezing; noisy breathing
+healthy_004,5.93,Female,other_multiple,1,west,Nothing (room air),"Asthma, environmental allergies, chronic cough and chronic congestion"
+healthy_005,1.47,Male,black,1,west,Nothing (room air), Tracheobronchomalacia
+healthy_006,3.56,Male,white,0,west,Nothing (room air),Concern for chronic aspiration
+healthy_007,3.36,Female,other_multiple,1,west,Nothing (room air),Concern for chronic aspiration
+healthy_008,0.93,Male,other_multiple,1,west,Nothing (room air),"Cyanotic events with effortful and noisy inspiration, presenting with severe cyanotic episode and presumed apnea/syncope"
+healthy_009,1.65,Female,white,0,west,Nothing (room air),Chronic otitis media with effusion
+healthy_010,0.45,Female,asian_PI,0,west,Nothing (room air),"Chronic tachypnea, unclear etiology"
+healthy_011,0.94,Female,other_multiple,0,west,Nothing (room air),Left mainstem bronchomalacia
+healthy_012,3.38,Female,asian_PI,0,west,Nothing (room air),Tracheomalacia and bronchomalacia
+healthy_013,7.31,Male,other_multiple,0,west,Nothing (room air),Grade 1 subglottic stenosis
+healthy_014,0.67,Male,white,1,west,Nothing (room air),Laryngomalacia
+healthy_015,4.07,Male,white,0,west,Nothing (room air),Tracheomalacia
+healthy_016,12.89,Female,white,0,west,Nothing (room air),Gastroesophageal Reflux
+healthy_017,4.77,Female,white,0,west,Nothing (room air),"Oropharyngeal dysphagia with aspiration, asthma, and mild tracheomalacia"
