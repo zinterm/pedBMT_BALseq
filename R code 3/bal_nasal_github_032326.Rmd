@@ -1,0 +1,3095 @@
+---
+title: "BAL vs Nasal Analysis R Markdown"
+author: "Erica Evans"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+# Setup
+
+## Load Packages
+```{r}
+library(bioDist)
+library(broom)
+library(clusterProfiler)
+library(corrplot)
+library(cowplot)
+library(DESeq2)
+library(DGCA)
+library(dplyr)
+library(edgeR)
+library(EnhancedVolcano)
+library(enrichplot)
+library(factoextra)
+library(gee)
+library(geepack)
+library(ggplot2)
+library(GSVA)
+library(Hmisc)
+library(MOFA2)
+library(msigdbr)
+library(pheatmap)
+library(plot3D)
+library(purrr)
+library(qusage)
+library(readxl)
+library(reshape2)
+library(Rfast)
+library(stats)
+library(stringr)
+library(tableone)
+library(tidyr)
+library(tidyverse)
+```
+
+## Load Data
+```{r}
+
+setwd("Q:/Erica/Analysis/github code")
+
+meta <- read.csv("meta_full_081925.csv", header=TRUE, row.names=1, check.names=FALSE)
+
+abx_score <- read.csv("abx_score 110922.csv", row.names = 1, header = TRUE)
+
+nasal_domain <- read.csv("nasal_domain_08182025.csv", header=TRUE, row.names=1, check.names=FALSE)
+nasal_genus <- read.csv("nasal_genus_08182025.csv", header=TRUE, row.names=1, check.names=FALSE)
+nasal_species <- read.csv("nasal_species_08182025.csv", header=TRUE, row.names=1, check.names=FALSE)
+nasal_genecounts <- read.csv("nasal_geneexp_filt_08182025.csv", header=TRUE, row.names=1, check.names=FALSE)
+nasal_genecounts_vst <- read.csv("nasal_genecounts_vst_082625.csv", header=TRUE, row.names=1, check.names=FALSE)
+nasal_gsva <- read.csv("nasal_gsva_082625.csv", header=TRUE, row.names=1, check.names=FALSE)
+nasal_cells <- read.csv("nasal_cells_08182025.csv", header=TRUE, row.names=1, check.names=FALSE)
+
+bal_domain <- read.csv("bal_domain_08182025.csv", header=TRUE, row.names=1, check.names=FALSE)
+bal_genus <- read.csv("bal_genus_08182025.csv", header=TRUE, row.names=1, check.names=FALSE)
+bal_species <- read.csv("bal_species_08182025.csv", header=TRUE, row.names=1, check.names=FALSE)
+bal_genecounts <- read.csv("bal_geneexp_filt_08182025.csv", header=TRUE, row.names=1, check.names=FALSE)
+bal_genecounts_vst <- read.csv("bal_genecounts_vst_082625.csv", header=TRUE, row.names=1, check.names=FALSE)
+bal_gsva <- read.csv("bal_gsva_082625.csv", header=TRUE, row.names=1, check.names=FALSE)
+bal_cells <- read.csv("bal_cells_08182025.csv", header=TRUE, row.names=1, check.names=FALSE)
+
+genecounts_vst_merge <- read.csv("genecounts_merge_vst_082625.csv", row.names = 1, header = TRUE)
+genecounts_vst_merge_sub <- genecounts_vst_merge[, names(genecounts_vst_merge)[names(genecounts_vst_merge) %in% intersect(names(bal_genecounts), names(nasal_genecounts))], drop = FALSE]
+gsva_merge <- read.csv("gsva_msigdb_inputvst_poisson_082625.csv", row.names = 1, header = TRUE)
+
+##
+meta_healthy <- read.csv("meta_healthy_031726.csv", header=TRUE, row.names=1, check.names=FALSE)
+
+nasal_domain_healthy <- read.csv("nasal_domain_healthy_031726.csv", header=TRUE, row.names=1, check.names=FALSE)
+nasal_genus_healthy <- read.csv("nasal_genus_healthy_031026.csv", header=TRUE, row.names=1, check.names=FALSE)
+nasal_species_healthy <- read.csv("nasal_species_healthy_031726.csv", header=TRUE, row.names=1, check.names=FALSE)
+nasal_genecounts_healthy <- read.csv("nasal_geneexp_filt_healthy_031626.csv", header=TRUE, row.names=1, check.names=FALSE)
+nasal_cells_healthy <- read.csv("nasal_cells_healthy_031726.csv", header=TRUE, row.names=1, check.names=FALSE)
+
+bal_domain_healthy <- read.csv("bal_domain_healthy_031726.csv", header=TRUE, row.names=1, check.names=FALSE)
+bal_genus_healthy <- read.csv("bal_genus_healthy_031026.csv", header=TRUE, row.names=1, check.names=FALSE)
+bal_species_healthy <- read.csv("bal_species_healthy_031726.csv", header=TRUE, row.names=1, check.names=FALSE)
+bal_genecounts_healthy <- read.csv("bal_geneexp_filt_healthy_031626.csv", header=TRUE, row.names=1, check.names=FALSE)
+bal_cells_healthy <- read.csv("bal_cells_healthy_031726.csv", header=TRUE, row.names=1, check.names=FALSE)
+
+```
+#. Prepare code
+```{r}
+
+msigdb <- read.gmt("h.all.v2023.2.Hs.symbols.gmt")
+m_df1 = msigdbr(species = "Homo sapiens", category = "H")
+m_df2 = msigdbr(species = "Homo sapiens", category = "C5", subcategory = "GO:BP")
+m_df3 = msigdbr(species = "Homo sapiens", category = "C2", subcategory = "CP:REACTOME")
+m_t2g1 = m_df1 %>% dplyr::select(gs_name, gene_symbol) %>% as.data.frame()
+m_t2g2 = m_df2 %>% dplyr::select(gs_name, gene_symbol) %>% as.data.frame()
+m_t2g3 = m_df3 %>% dplyr::select(gs_name, gene_symbol) %>% as.data.frame()
+m_t2g <- rbind(m_t2g1, m_t2g2)
+m_t2g <- rbind(m_t2g, m_t2g3)
+m_t2g$gs_name <- str_replace_all(m_t2g$gs_name, "_", " ")
+m_t2g$gs_name <- str_to_title(m_t2g$gs_name, locale="en")
+
+custom_theme <- theme(
+    panel.background = element_rect(fill = "white", color= "black"),
+    panel.border = element_blank(),  # Remove default border
+    #panel.grid = element_blank(),   # Remove grid lines if needed
+    axis.line.x.bottom = element_line(color = "black"),  # Bottom line
+    axis.line.y.left = element_line(color = "black"),    # Left line
+    axis.line.x.top = element_blank(),    # No top line
+    axis.line.y.right = element_blank(),  # No right line
+    axis.ticks.length = unit(3, "pt"),     # Optional: Adjust tick size
+    legend.position = "none")
+
+```
+#.
+# Analysis 1 - Clinical data
+```{r}
+
+# Demographics & Medical History
+n_distinct(meta$sample_id)            ## 189 sample-pairs (encounters)
+n_distinct(meta$hospitalization_id)   ## 180 hospitalizations
+n_distinct(meta$patient_id)           ## 160 patients
+
+
+meta_sub <- meta %>% group_by(patient_id) %>% slice_max(order_by = as.numeric(age_at_study_years), n = 1) %>% ungroup()
+
+
+table1a <- CreateTableOne(
+  vars = c("age_at_study_years", "sex", "race", "ethnicity_dichot", "region", "disease", "disease_cat", "hsct_type", "hsct_source", "hsct_donor_cat", "busulfan", "melphalan", "serotherapy", "tbi"),
+  data = meta_sub,
+  includeNA = TRUE,
+  factorVars = c("sex", "race", "ethnicity_dichot", "disease", "disease_cat",
+                 "hsct_type", "hsct_source", "hsct_donor_cat",
+                 "busulfan", "melphalan", "serotherapy", "tbi"))
+print(table1a, nonnormal = c("age_at_study_years"), showAllLevels = TRUE, missing = TRUE)
+
+
+# Characteristics at Enrollment (n = 189 events with paired BAL-Nasal samples)
+table1b <- CreateTableOne(
+  vars = c("hsct_to_study_days", "symptoms_to_study_days", "spo2_support", "engraftment_syndrome", "gvhd", "gvhd_ever", "heart_failure", "kidney_injury", "pericardial_effusion", "pulmonary_hemorrhage", "sepsis", "TMA", "VOD", "anc", "alc", "diagnosis_wo_ngs", "ips_subtype_wo_ngs"),
+  data = meta,
+  includeNA = TRUE,
+  factorVars = c("spo2_support", "engraftment_syndrome", "gvhd", "gvhd_ever", "heart_failure", "kidney_injury", "pericardial_effusion", "pulmonary_hemorrhage", "sepsis", "TMA", "VOD", "diagnosis_wo_ngs", "ips_subtype_wo_ngs"))
+print(table1b, nonnormal = c("age_at_study_years", "hsct_to_study_days", "symptoms_to_study_days", "anc", "alc"), showAllLevels = TRUE, missing = TRUE)
+
+sum(meta$anc <0.5, na.rm = TRUE)
+sum(meta$alc <0.2, na.rm = TRUE)
+
+
+# Outcomes (per hospitalization?)
+table1c <- CreateTableOne(
+  vars = c("picu", "ippv_7d_min", "outcome_dichot", "deadorvent7d", "km_outcome_dichot"),
+  data = meta_sub,
+  includeNA = TRUE,
+  factorVars = c("picu", "ippv_7d_min", "outcome_dichot", "deadorvent7d", "km_outcome_dichot"))
+print(table1c, showAllLevels = TRUE, missing = TRUE)
+
+table(meta_sub$ippv_7d_min, meta_sub$deadorvent7d)
+
+
+```
+#.
+# Analysis 2 - GXP overview
+#... BMT vs healthy
+```{r}
+
+
+## how many genes detected per sample?
+summary(rowSums(nasal_genecounts > 0, na.rm = TRUE)) 
+summary(rowSums(bal_genecounts > 0, na.rm = TRUE))  
+
+
+
+# merge genecounts (repeat for BAL & for bal)
+bal_genecounts_combined <- rbind(bal_genecounts[, intersect(names(bal_genecounts), names(bal_genecounts_healthy))],
+                     bal_genecounts_healthy[, intersect(names(bal_genecounts), names(bal_genecounts_healthy))])
+bal_genecounts_combined_vst <- as.data.frame(varianceStabilizingTransformation(as.matrix(t(round(bal_genecounts_combined)))))  ## samples in columns
+bal_genecounts_combined_vst <- as.data.frame(t(bal_genecounts_combined_vst))
+
+
+## MDS plot (repeat for nasal & for nasal)
+dge_nasal_bmtvshealthy <- DGEList(counts = t(nasal_genecounts_combined)) # create DGEList with nasal and nasal counts
+sample_type <- c(rep("BMT", 189), rep("Healthy", 17))
+dge_nasal_bmtvshealthy$samples$group <- sample_type # add sample type as the grouping factor
+dge_nasal_bmtvshealthy_fn <- normLibSizes(dge_nasal_bmtvshealthy)
+colors_nasal_bmtvshealthy <- ifelse(dge_nasal_bmtvshealthy_fn$samples$group == "BMT", "forestgreen", "plum")
+table(dge_nasal_bmtvshealthy_fn$samples$group, colors_nasal_bmtvshealthy)
+plotMDS(dge_nasal_bmtvshealthy_fn, col=colors_nasal_bmtvshealthy, pch = 16)
+legend("topright", legend=unique(dge_nasal_bmtvshealthy_fn$samples$group), col = c("forestgreen", "plum"), pch = 16, bty = "n")
+
+
+
+
+## test for associations
+meta_healthy$patient_id <- rownames(meta_healthy)
+meta_healthy$patient_type <- "Healthy"
+rownames(meta) <- meta$sample_id
+meta$patient_type <- "BMT"
+meta_merge <-  rbind(meta[, intersect(names(meta), names(meta_healthy))],
+                     meta_healthy[, intersect(names(meta), names(meta_healthy))])
+
+df <- merge(nasal_genecounts_combined_vst, meta_merge, by="row.names")
+rownames(df) <- df$Row.names   
+df <- subset(df, select=-1)
+
+model <- geeglm(CXCL8 ~ as.factor(patient_type) + age_at_study_years + as.factor(sex), id=as.factor(patient_id), family = gaussian, corstr = "exchangeable", data = df)
+summary(model)  
+
+ggplot(df, aes(x = as.factor(patient_type), y = CXCL8)) + geom_violin(trim=TRUE) +  geom_boxplot(outlier.size = 0.5, fill = "#00A3E0", outlier.shape = NA) + geom_jitter(shape=16, position=position_jitter(0.1), size=1) 
+
+
+## now loop
+varlist <- colnames(nasal_genecounts_combined_vst) 
+length(varlist)
+
+#### pick model
+results_df <- map_dfr(varlist, function(var) {
+  message("Fitting: ", var); flush.console()
+  fml <- as.formula(sprintf("`%s` ~ as.factor(patient_type) + age_at_study_years + as.factor(sex)", var))
+  model <- geeglm(fml, id=as.factor(patient_id), family = gaussian, corstr = "independence", data = df)
+  tidy(model, conf.int = TRUE) %>% mutate(outcome = var) %>% 
+    dplyr::select(outcome, term, estimate, conf.low, conf.high, p.value)
+})
+
+## NOW APPLY FDR CORRECTION TO JUST THE desired P-VALUES
+results_df_sub <- results_df[which(results_df$term=="as.factor(patient_type)Healthy"),]
+results_df_sub$fdr <- p.adjust(results_df_sub$p.value, method="fdr")
+nrow(results_df_sub[which(results_df_sub$fdr<0.05),]) 
+results_df_merge <- left_join(results_df, results_df_sub)
+head(results_df_merge, n=10)
+
+write.csv(results_df_merge, "geeglm_gxp_bmtvshealthy_nasalonly_adjagesexpatient_031826.csv")
+
+
+#### Pathway Enrichment
+results_df_sub <- read.csv("geeglm_gxp_bmtvshealthy_balonly_adjagesexpatient_031826.csv", header=TRUE, row.names=1, check.names=FALSE)
+results_df_sub_sig <- results_df_sub[which(results_df_sub$fdr<0.05),]
+
+degs <- results_df_sub_sig$outcome
+geneList <- results_df_sub_sig$estimate # put LogFC here from edgeR output (tops_filt)
+names(geneList) <- as.character(degs) # put gene SYMBOL here
+geneList = sort(geneList, decreasing = TRUE)
+length(geneList)
+
+gse_msigdb <- GSEA(geneList, TERM2GENE = m_t2g, minGSSize = 10, maxGSSize = 300, pvalueCutoff = 1, pAdjustMethod = "BH",  by = "fgsea") 
+
+head(gse_msigdb, 40)
+gse_msigdb_df <- as.data.frame(gse_msigdb)
+#gse_msigdb_df <- gse_msigdb_df[ which(gse_msigdb_df$p.adjust<=0.05), ]
+
+#write.csv(gse_msigdb_df, "geeglm_gxp_bmtvshealthy_nasalonly_adjagesexpatient_031826_GSEA.csv")
+#write.csv(gse_msigdb_df, "geeglm_gxp_bmtvshealthy_balonly_NOPVALCUTOFF_adjagesexpatient_031826_GSEA.csv")
+
+gse_msigdb_df <- read.csv("geeglm_gxp_bmtvshealthy_nasalonly_NOPVALCUTOFF_adjagesexpatient_031826_GSEA.csv", header=TRUE, row.names=1, check.names=FALSE)
+gse_msigdb_df$NES_rev <- gse_msigdb_df$NES*-1
+EnhancedVolcano(gse_msigdb_df, x = 'NES_rev', y = 'p.adjust',lab = rep("", nrow(gse_msigdb_df)), xlim=c(-7,7), ylim=c(0,10), #lab=df$outcome,
+    pCutoff = 0.05, FCcutoff = 1,  title = NULL, subtitle = NULL, caption = NULL, )
+
+
+
+#### CELL COUNTS
+
+bal_cells_combined <- rbind(bal_cells, bal_cells_healthy)
+
+meta_healthy$patient_id <- rownames(meta_healthy)
+meta_healthy$patient_type <- "Healthy"
+rownames(meta) <- meta$sample_id
+meta$patient_type <- "BMT"
+meta_merge <-  rbind(meta[, intersect(names(meta), names(meta_healthy))],
+                     meta_healthy[, intersect(names(meta), names(meta_healthy))])
+
+df <- merge(bal_cells_combined, meta_merge, by="row.names")
+rownames(df) <- df$Row.names   
+df <- subset(df, select=-1)
+
+
+## test for associations
+model <- geeglm(Epithelial...AT2 ~ as.factor(patient_type) + age_at_study_years + as.factor(sex), id=as.factor(patient_id), family = gaussian, corstr = "exchangeable", data = df)
+summary(model)  
+
+ggplot(df, aes(x = as.factor(patient_type), y = Epithelial...Goblet)) + geom_violin(trim=TRUE) +  geom_boxplot(outlier.size = 0.5, fill = "#00A3E0", outlier.shape = NA) + geom_jitter(shape=16, position=position_jitter(0.1), size=1) 
+
+
+## now loop
+varlist <- colnames(nasal_cells_combined) 
+length(varlist)
+
+#### pick model
+results_df <- map_dfr(varlist, function(var) {
+  message("Fitting: ", var); flush.console()
+  fml <- as.formula(sprintf("`%s` ~ as.factor(patient_type) + age_at_study_years + as.factor(sex)", var))
+  model <- geeglm(fml, id=as.factor(patient_id), family = gaussian, corstr = "independence", data = df)
+  tidy(model, conf.int = TRUE) %>% mutate(outcome = var) %>% 
+    dplyr::select(outcome, term, estimate, conf.low, conf.high, p.value)
+})
+
+## NOW APPLY FDR CORRECTION TO JUST THE desired P-VALUES
+results_df_sub <- results_df[which(results_df$term=="as.factor(patient_type)Healthy"),]
+results_df_sub$fdr <- p.adjust(results_df_sub$p.value, method="fdr")
+nrow(results_df_sub[which(results_df_sub$fdr<0.05),]) 
+results_df_merge <- left_join(results_df, results_df_sub)
+head(results_df_merge, n=10)
+
+write.csv(results_df_merge, "geeglm_cells_bmtvshealthy_nasalonly_adjagesexpatient_031826.csv")
+
+p1 <- ggplot(df, aes(x = fct_rev(patient_type), y = Myeloid...Alveolar.Macrophage)) + geom_violin(trim=TRUE) +  geom_boxplot(outlier.size = 0.5, fill = "#00A3E0", outlier.shape = NA) + geom_jitter(shape=16, position=position_jitter(0.1), size=1) + custom_theme + labs(title = "Cell Type") 
+p2 <- ggplot(df, aes(x = fct_rev(patient_type), y = Lymphoid...CD8.T.cell)) + geom_violin(trim=TRUE) +  geom_boxplot(outlier.size = 0.5, fill = "#00A3E0", outlier.shape = NA) + geom_jitter(shape=16, position=position_jitter(0.1), size=1) + custom_theme + labs(title = "Cell Type") 
+p3 <- ggplot(df, aes(x = fct_rev(patient_type), y = Epithelial...AT1)) + geom_violin(trim=TRUE) +  geom_boxplot(outlier.size = 0.5, fill = "#00A3E0", outlier.shape = NA) + geom_jitter(shape=16, position=position_jitter(0.1), size=1) + custom_theme + labs(title = "Cell Type") 
+p4 <- ggplot(df, aes(x = fct_rev(patient_type), y = Epithelial...Mucous)) + geom_violin(trim=TRUE) +  geom_boxplot(outlier.size = 0.5, fill = "#00A3E0", outlier.shape = NA) + geom_jitter(shape=16, position=position_jitter(0.1), size=1) + custom_theme + labs(title = "Cell Type") 
+
+p5 <- ggplot(df, aes(x = fct_rev(patient_type), y = Epithelial...Goblet)) + geom_violin(trim=TRUE) +  geom_boxplot(outlier.size = 0.5, fill = "#00A3E0", outlier.shape = NA) + geom_jitter(shape=16, position=position_jitter(0.1), size=1) + custom_theme + labs(title = "Cell Type") 
+p6 <- ggplot(df, aes(x = fct_rev(patient_type), y = Epithelial...Duct)) + geom_violin(trim=TRUE) +  geom_boxplot(outlier.size = 0.5, fill = "#00A3E0", outlier.shape = NA) + geom_jitter(shape=16, position=position_jitter(0.1), size=1) + custom_theme + labs(title = "Cell Type") 
+p7 <- ggplot(df, aes(x = fct_rev(patient_type), y = Epithelial...Secretory)) + geom_violin(trim=TRUE) +  geom_boxplot(outlier.size = 0.5, fill = "#00A3E0", outlier.shape = NA) + geom_jitter(shape=16, position=position_jitter(0.1), size=1) + custom_theme + labs(title = "Cell Type") 
+p8 <- ggplot(df, aes(x = fct_rev(patient_type), y = Epithelial...Ciliated)) + geom_violin(trim=TRUE) +  geom_boxplot(outlier.size = 0.5, fill = "#00A3E0", outlier.shape = NA) + geom_jitter(shape=16, position=position_jitter(0.1), size=1) + custom_theme + labs(title = "Cell Type") 
+
+plot_grid(p1, p2, p3, p4, ncol=2, align="v")
+plot_grid(p5, p6, p7, p8, ncol=2, align="v")
+
+```
+# Analysis 2a - DEGs by body site
+#... BMT
+```{r}
+
+
+## MDS plot
+# Create a DGEList containing the count data.
+nasal_genecounts_subset <- nasal_genecounts_combined[, colnames(nasal_genecounts_combined) %in% colnames(bal_genecounts_combined)]
+bal_genecounts_subset <- bal_genecounts_combined[, colnames(bal_genecounts_combined) %in% colnames(nasal_genecounts_combined)]
+
+dge_npvbal_np <- DGEList(counts = t(nasal_genecounts_subset)) # genes as rows
+dge_npvbal_bal <- DGEList(counts = t(bal_genecounts_subset)) # create DGEList for bal data
+all_counts <- cbind(dge_npvbal_np$counts, dge_npvbal_bal$counts) # merge the two counts
+dge_npvbal <- DGEList(counts = all_counts) # create DGEList with nasal and BAL counts
+sample_type <- c(rep("NP", ncol(dge_npvbal_np)), rep("BAL", ncol(dge_npvbal_bal))) # create a grouping factor based on sample type
+dge_npvbal$samples$group <- sample_type # add sample type as the grouping factor
+
+# TMM Normalization to account for compositional differences between libraries.
+dge_npvbal_fn <- normLibSizes(dge_npvbal)
+
+##### FIGURE 2A -- PlotMDS
+colors_npvbal <- ifelse(dge_npvbal_fn$samples$group == "NP", "forestgreen", "plum")
+table(dge_npvbal_fn$samples$group, colors_npvbal)
+plotMDS(dge_npvbal_fn, col=colors_npvbal, pch = 15)
+legend("topright", legend=unique(dge_npvbal_fn$samples$group), col = c("forestgreen", "plum"), pch = 15, bty = "n")
+
+
+#############################################################
+## DEGs by site
+rownames(meta) <- meta$sample_id
+bal_meta_temp <- meta
+bal_meta_temp$site <- "BAL"
+rownames(bal_meta_temp) <- paste0(rownames(bal_meta_temp), "_BAL")
+nasal_meta_temp <- meta
+nasal_meta_temp$site <- "Nasal"
+rownames(nasal_meta_temp) <- paste0(rownames(nasal_meta_temp), "_Nasal")
+meta_merge <- rbind(bal_meta_temp, nasal_meta_temp)
+
+genecounts_vst_merge_sub <- genecounts_vst_merge[, names(genecounts_vst_merge)[names(genecounts_vst_merge) %in% intersect(names(bal_genecounts), names(nasal_genecounts))], drop = FALSE]
+df <- merge(genecounts_vst_merge_sub, meta_merge, by="row.names")
+rownames(df) <- df$Row.names   
+df <- subset(df, select=-1)
+
+
+## RUN ONCE linking by sample_id
+model <- geeglm(SFTPB ~ site + age_at_study_years + as.factor(sex), id=as.factor(sample_id), family = gaussian, corstr = "independence", data = df)
+summary(model)    
+summary(model, expontentiate=TRUE)    
+
+
+## RUN LOOP
+vars <- colnames(genecounts_vst_merge[,1:50])
+vars <- colnames(genecounts_vst_merge_sub)
+length(vars)
+
+results_df <- purrr::map_dfr(vars, function(var) {
+  message("Fitting: ", var); flush.console()
+  fml <- as.formula(sprintf("`%s` ~ as.factor(site) + age_at_study_years + as.factor(sex)", var))
+  model <- geeglm(fml, id = as.factor(sample_id), family = gaussian, corstr = "independence", data = df)
+  out <- broom::tidy(model, conf.int = TRUE, exponentiate = FALSE) %>% dplyr::mutate(outcome = var)
+
+  # Recompute p using a numerically-stable log-tail:
+  # Wald z = estimate / std.error; two-sided p = 1 - F_{chi^2_1}(z^2)
+  z   <- out$estimate / out$std.error
+  lp  <- pchisq(z^2, df = 1, lower.tail = FALSE, log.p = TRUE)     # log(p)
+  nlp <- -lp / log(10)                                            # -log10(p)
+
+  # For display: show "< 1e-308" if it would underflow in double precision
+  p_pretty <- ifelse(nlp > 308, "< 1e-308", format(exp(lp), scientific = TRUE, digits = 6))
+  out %>% dplyr::mutate(
+      statistic     = z,
+      log_p         = lp,              # natural log p-value
+      neg_log10_p   = nlp,             # -log10(p)
+      p_value_disp  = p_pretty         # human-friendly string
+    ) %>%
+    dplyr::select(outcome, term, estimate, std.error, statistic, conf.low, conf.high, neg_log10_p, p_value_disp)
+})
+
+## FDR adjust the var of interest
+results_df_sub <- results_df[which(results_df$term=="as.factor(site)Nasal"),]
+results_df_sub$site_fdr <- p.adjust(results_df_sub$p_value_disp, method="fdr")
+nrow(results_df_sub[which(results_df_sub$site_fdr<0.05),])
+results_df_sub_sig <- results_df_sub[which(results_df_sub$site_fdr<0.05),] ## 13,698 sig diff
+results_df_merge <- left_join(results_df, results_df_sub)
+head(results_df_merge, n=10)
+#write.csv(results_df_merge, "geeglm_gxp_nasalvsbal_adjagesexsample_090525.csv")
+
+
+
+##### FIGURE 2B - VOLCANO
+results_df_merge <- read.csv("geeglm_gxp_nasalvsbal_adjagesexsample_090525.csv", header=TRUE, row.names=1, check.names=FALSE)
+results_df_sub <- results_df_merge[which(results_df_merge$term=="as.factor(site)Nasal"),]
+
+EnhancedVolcano(results_df_sub, x = 'estimate', y = 'site_fdr', xlim=c(-3.5,3.5), lab = rep("", nrow(results_df_sub)), # ylim=c(0,17),
+    pCutoff = 0.05, FCcutoff = 0.3,  title = NULL, subtitle = NULL, caption = NULL)
+
+
+##### FIGURE 2C - BOX-WHISKER 
+genecounts_vst_merge$sampletype <- c(rep("BAL", 189), rep("NASAL", 189)) 
+p1 <- ggplot(genecounts_vst_merge, aes(x = as.factor(sampletype), y = CD163, color=as.factor(sampletype))) + geom_violin(trim=TRUE) + geom_boxplot(width=0.3, color="blue", outlier.shape = NA) + geom_jitter(shape=16, position=position_jitter(0.1)) + theme(legend.position = "none")
+p2 <- ggplot(genecounts_vst_merge, aes(x = as.factor(sampletype), y = MARCO, color=as.factor(sampletype))) + geom_violin(trim=TRUE) + geom_boxplot(width=0.3, color="blue", outlier.shape = NA) + geom_jitter(shape=16, position=position_jitter(0.1)) + theme(legend.position = "none")
+p3 <- ggplot(genecounts_vst_merge, aes(x = as.factor(sampletype), y = FN1, color=as.factor(sampletype))) + geom_violin(trim=TRUE) + geom_boxplot(width=0.3, color="blue", outlier.shape = NA) + geom_jitter(shape=16, position=position_jitter(0.1)) + theme(legend.position = "none")
+p4 <- ggplot(genecounts_vst_merge, aes(x = as.factor(sampletype), y = CXCL8, color=as.factor(sampletype))) + geom_violin(trim=TRUE) + geom_boxplot(width=0.3, color="blue", outlier.shape = NA) + geom_jitter(shape=16, position=position_jitter(0.1)) + theme(legend.position = "none")
+p5 <- ggplot(genecounts_vst_merge, aes(x = as.factor(sampletype), y = MUC5AC, color=as.factor(sampletype))) + geom_violin(trim=TRUE) + geom_boxplot(width=0.3, color="blue", outlier.shape = NA) + geom_jitter(shape=16, position=position_jitter(0.1)) + theme(legend.position = "none")
+p6 <- ggplot(genecounts_vst_merge, aes(x = as.factor(sampletype), y = CEACAM6, color=as.factor(sampletype))) + geom_violin(trim=TRUE) + geom_boxplot(width=0.3, color="blue", outlier.shape = NA) + geom_jitter(shape=16, position=position_jitter(0.1)) + theme(legend.position = "none")
+plot_grid(p1, p2, p3, p4, p5, p6, ncol=3, align="v")
+
+## cell deconvolution
+
+## view stacked barplots
+df <- bal_cells
+df$sample <- rownames(bal_cells)
+bal_long <- pivot_longer(df, 
+                        cols = -sample, 
+                        names_to = "Category", 
+                        values_to = "Fraction")
+p1 <- ggplot(bal_long, aes(x = Fraction, y = fct_rev(sample), fill = Category)) +
+  geom_bar(stat = "identity", width=1) +
+  labs(x = "Fraction", y = "Sample", title = "BAL Cell Fractions") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) + guides(fill = guide_legend(ncol = 1))
+
+df <- nasal_cells
+df$sample <- rownames(nasal_cells)
+nasal_long <- pivot_longer(df, 
+                        cols = -sample, 
+                        names_to = "Category", 
+                        values_to = "Fraction")
+p2 <- ggplot(nasal_long, aes(x = Fraction, y = fct_rev(sample), fill = Category)) +
+  geom_bar(stat = "identity", width=1) +
+  labs(x = "Fraction", y = "Sample", title = "Nasal Cell Fractions") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) + guides(fill = guide_legend(ncol = 1))
+
+plot_grid(p1, p2, ncol=2, align="v")
+
+## what are the differences?
+library(dplyr)
+bal_cell_categories <- bal_cells %>%
+  mutate(
+    BAL_Lymphoid_sum = rowSums(dplyr::select(., starts_with("Lymphoid")), na.rm = TRUE),
+    BAL_Myeloid_sum = rowSums(dplyr::select(., starts_with("Myeloid")), na.rm = TRUE),
+    BAL_Epithelial_sum = rowSums(dplyr::select(., starts_with("Epithelial")), na.rm = TRUE)
+  )
+bal_cell_categories <- subset(bal_cell_categories, select=29:31)
+
+nasal_cell_categories <- nasal_cells %>%
+  mutate(
+    Nasal_Lymphoid_sum = rowSums(dplyr::select(., starts_with("Lymphoid")), na.rm = TRUE),
+    Nasal_Myeloid_sum = rowSums(dplyr::select(., starts_with("Myeloid")), na.rm = TRUE),
+    Nasal_Epithelial_sum = rowSums(dplyr::select(., starts_with("Epithelial")), na.rm = TRUE)
+  )
+nasal_cell_categories <- subset(nasal_cell_categories, select=21:23)
+
+cell_diffs_nasal_minus_bal <- nasal_cell_categories - bal_cell_categories
+summary(cell_diffs_nasal_minus_bal$Nasal_Epithelial_sum)
+summary(cell_diffs_nasal_minus_bal$Nasal_Myeloid_sum)
+summary(cell_diffs_nasal_minus_bal$Nasal_Lymphoid_sum)
+
+######
+colnames(bal_cell_categories) <- substr(colnames(bal_cell_categories), 5, nchar(colnames(bal_cell_categories)))
+colnames(nasal_cell_categories) <- substr(colnames(nasal_cell_categories), 7, nchar(colnames(nasal_cell_categories)))
+rownames(bal_cell_categories) <- paste0(rownames(bal_cell_categories), "_BAL")
+rownames(nasal_cell_categories) <- paste0(rownames(nasal_cell_categories), "_Nasal")
+cell_categ_merge <- rbind(bal_cell_categories, nasal_cell_categories)
+cell_categ_merge$sampletype <- c(rep("BAL", 189), rep("Nasal", 189))
+
+p1 <- ggplot(cell_categ_merge, aes(x = as.factor(sampletype), y = Epithelial_sum, color=as.factor(sampletype))) + geom_violin(trim=TRUE) + geom_boxplot(width=0.3, color="blue", outlier.shape = NA) + geom_jitter(shape=16, position=position_jitter(0.1)) + theme(legend.position = "none") + ylim(0,0.8)
+p2 <- ggplot(cell_categ_merge, aes(x = as.factor(sampletype), y = Myeloid_sum, color=as.factor(sampletype))) + geom_violin(trim=TRUE) + geom_boxplot(width=0.3, color="blue", outlier.shape = NA) + geom_jitter(shape=16, position=position_jitter(0.1)) + theme(legend.position = "none") + ylim(0,0.8)
+p3 <- ggplot(cell_categ_merge, aes(x = as.factor(sampletype), y = Lymphoid_sum, color=as.factor(sampletype))) + geom_violin(trim=TRUE) + geom_boxplot(width=0.3, color="blue", outlier.shape = NA) + geom_jitter(shape=16, position=position_jitter(0.1)) + theme(legend.position = "none") + ylim(0,0.8)
+plot_grid(p1, p2, p3, ncol=3, align="v")
+
+
+
+
+ggplot(nasal_cells, aes(x = log10((nasal_cells$Epithelial...Squamous+0.001)/(nasal_cells$Epithelial...Ciliated+0.001)))) + geom_density(fill = "red", alpha = 0.2) + theme(legend.position="none", plot.title = element_text(face = "bold", hjust = 0.5)) + labs(title="Nasal Swab Cell Fraction", x="Squamous-to-Ciliated Ratio") + geom_vline(xintercept = 0, linetype = "dashed", linewidth = 0.5, alpha = 0.7)  + geom_histogram(aes(y = ..density..), binwidth = 0.1, fill = "blue", alpha = 0.4)
+
+
+p1 <- ggplot(nasal_genecounts_vst, aes(x = FOXJ1)) + geom_density(fill = "red", alpha = 0.2) + theme(legend.position="none", plot.title = element_text(face = "bold", hjust = 0.5)) + labs(title="Nasal FOXJ1", x="Gene counts (VST'ed)") + geom_histogram(aes(y = ..density..), binwidth = 0.2, fill = "blue", alpha = 0.4)
+p2 <- ggplot(nasal_genecounts_vst, aes(x = SCGB1A1)) + geom_density(fill = "red", alpha = 0.2) + theme(legend.position="none", plot.title = element_text(face = "bold", hjust = 0.5)) + labs(title="Nasal SCGB1A1", x="Gene counts (VST'ed)") + geom_histogram(aes(y = ..density..), binwidth = 0.2, fill = "blue", alpha = 0.4)
+p3 <- ggplot(nasal_genecounts_vst, aes(x = ECM1)) + geom_density(fill = "red", alpha = 0.2) + theme(legend.position="none", plot.title = element_text(face = "bold", hjust = 0.5)) + labs(title="Nasal ECM1", x="Gene counts (VST'ed)") + geom_histogram(aes(y = ..density..), binwidth = 0.2, fill = "blue", alpha = 0.4)
+p4 <- ggplot(nasal_genecounts_vst, aes(x = SPRR3)) + geom_density(fill = "red", alpha = 0.2) + theme(legend.position="none", plot.title = element_text(face = "bold", hjust = 0.5)) + labs(title="Nasal PRSS22", x="Gene counts (VST'ed)") + geom_histogram(aes(y = ..density..), binwidth = 0.2, fill = "blue", alpha = 0.4)
+plot_grid(p1, p2, p3, p4, ncol=2, align="v")
+
+
+
+
+```
+#... Healthy
+```{r}
+
+
+#############################################################
+## DEGs by site
+rownames(meta_healthy) <- meta_healthy$sample_id
+bal_meta_healthy_temp <- meta_healthy
+bal_meta_healthy_temp$site <- "BAL"
+rownames(bal_meta_healthy_temp) <- paste0(rownames(bal_meta_healthy_temp), "_BAL")
+nasal_meta_healthy_temp <- meta_healthy
+nasal_meta_healthy_temp$site <- "Nasal"
+rownames(nasal_meta_healthy_temp) <- paste0(rownames(nasal_meta_healthy_temp), "_Nasal")
+meta_healthy_merge <- rbind(bal_meta_healthy_temp, nasal_meta_healthy_temp)
+
+bal_genecounts_healthy_vst_filt <- filterGenes(t(bal_genecounts_healthy_vst), filterTypes = c("central", "dispersion"), filterCentralType = "median", filterCentralPercentile = 0.1, filterDispersionType = "cv", filterDispersionPercentile = 0.1, sequential = TRUE)
+bal_genecounts_healthy_vst_filt <- as.data.frame(t(bal_genecounts_healthy_vst_filt))
+
+nasal_genecounts_healthy_vst_filt <- filterGenes(t(nasal_genecounts_healthy_vst), filterTypes = c("central", "dispersion"), filterCentralType = "median", filterCentralPercentile = 0.1, filterDispersionType = "cv", filterDispersionPercentile = 0.1, sequential = TRUE)
+nasal_genecounts_healthy_vst_filt <- as.data.frame(t(nasal_genecounts_healthy_vst_filt))
+
+healthy_vst_genecounts_combined <- rbind(bal_genecounts_healthy_vst[, intersect(names(bal_genecounts_healthy_vst), names(nasal_genecounts_healthy_vst))],
+                     nasal_genecounts_healthy_vst[, intersect(names(bal_genecounts_healthy_vst), names(nasal_genecounts_healthy_vst))])
+
+df <- cbind(healthy_vst_genecounts_combined, meta_healthy_merge)
+
+
+## RUN ONCE
+model <- glm(H4C11 ~ site + age_at_study_years + as.factor(sex), family = gaussian, data = df)
+summary(model)    
+summary(model, expontentiate=TRUE)    
+
+
+## RUN LOOP
+#vars <- colnames(healthy_vst_genecounts_combined[,1:50])
+#vars <- colnames(healthy_vst_genecounts_combined[,17656:ncol(healthy_vst_genecounts_combined)])
+vars <- colnames(healthy_vst_genecounts_combined)
+length(vars)
+
+results_df <- purrr::map_dfr(vars, function(var) {
+  message("Fitting: ", var); flush.console()
+  fml <- as.formula(sprintf("`%s` ~ as.factor(site) + age_at_study_years + as.factor(sex)", var))
+  model <- glm(fml, family = gaussian, data = df)
+  out <- broom::tidy(model, conf.int = TRUE, exponentiate = FALSE) %>% dplyr::mutate(outcome = var)
+
+  # Recompute p using a numerically-stable log-tail:
+  # Wald z = estimate / std.error; two-sided p = 1 - F_{chi^2_1}(z^2)
+  z   <- out$estimate / out$std.error
+  lp  <- pchisq(z^2, df = 1, lower.tail = FALSE, log.p = TRUE)     # log(p)
+  nlp <- -lp / log(10)                                            # -log10(p)
+
+  # For display: show "< 1e-308" if it would underflow in double precision
+  p_pretty <- ifelse(nlp > 308, "< 1e-308", format(exp(lp), scientific = TRUE, digits = 6))
+  out %>% dplyr::mutate(
+      statistic     = z,
+      log_p         = lp,              # natural log p-value
+      neg_log10_p   = nlp,             # -log10(p)
+      p_value_disp  = p_pretty         # human-friendly string
+    ) %>%
+    dplyr::select(outcome, term, estimate, std.error, statistic, conf.low, conf.high, neg_log10_p, p_value_disp)
+})
+
+## FDR adjust the var of interest
+results_df_sub <- results_df[which(results_df$term=="as.factor(site)Nasal"),]
+results_df_sub$site_fdr <- p.adjust(results_df_sub$p_value_disp, method="fdr")
+nrow(results_df_sub[which(results_df_sub$site_fdr<0.05),])
+results_df_sub_sig <- results_df_sub[which(results_df_sub$site_fdr<0.05),] ## 13,698 sig diff
+results_df_merge <- left_join(results_df, results_df_sub)
+head(results_df_merge, n=10)
+write.csv(results_df_merge, "geeglm_gxp_nasalvsbal_HEALTHY_adjagesex_031726.csv")
+
+
+####  cell deconvolution
+
+## what are the differences?
+
+bal_cell_categories_healthy <- bal_cells_healthy %>%
+  mutate(
+    BAL_Lymphoid_sum = rowSums(dplyr::select(., starts_with("Lymphoid")), na.rm = TRUE),
+    BAL_Myeloid_sum = rowSums(dplyr::select(., starts_with("Myeloid")), na.rm = TRUE),
+    BAL_Epithelial_sum = rowSums(dplyr::select(., starts_with("Epithelial")), na.rm = TRUE)
+  )
+bal_cell_categories_healthy <- subset(bal_cell_categories_healthy, select=29:31)
+
+nasal_cell_categories_healthy <- nasal_cells_healthy %>%
+  mutate(
+    Nasal_Lymphoid_sum = rowSums(dplyr::select(., starts_with("Lymphoid")), na.rm = TRUE),
+    Nasal_Myeloid_sum = rowSums(dplyr::select(., starts_with("Myeloid")), na.rm = TRUE),
+    Nasal_Epithelial_sum = rowSums(dplyr::select(., starts_with("Epithelial")), na.rm = TRUE)
+  )
+nasal_cell_categories_healthy <- subset(nasal_cell_categories_healthy, select=21:23)
+
+cell_diffs_nasal_minus_bal <- nasal_cell_categories_healthy - bal_cell_categories_healthy
+summary(cell_diffs_nasal_minus_bal$Nasal_Epithelial_sum)
+summary(cell_diffs_nasal_minus_bal$Nasal_Myeloid_sum)
+summary(cell_diffs_nasal_minus_bal$Nasal_Lymphoid_sum)
+
+```
+# Analysis 2b - site specific networks
+#... BMT
+``` {r}
+
+
+gsva_merge <- as.data.frame(t(gsva_merge))
+meta_sub <- meta
+
+
+# set comparison
+sampletype <- c(rep("BAL", 189), rep("Nasal", 189))
+
+design <- model.matrix(~sampletype + 0)
+colnames(design) = c("BAL", "Nasal")
+
+# run 
+brewer=rgb(colorRamp(c("blue", "cornflowerblue", "white", "pink", "red"), space="rgb", interpolate="linear")(0:255/255), maxColorValue=255)
+ddcor_res = ddcorAll(inputMat = gsva_merge, design = design, compare = c("BAL", "Nasal"), adjust = "fdr", nPerm = 0, corrType="spearman", heatmapPlot=TRUE, cexRow=0.4, cexCol=0.4, sepwidth=c(0,0), col=colorRampPalette(brewer))
+head(ddcor_res)
+
+#write.csv(ddcor_res, "ddcor_res_balvsnasal_082025_msigdbhallmark.csv")
+
+
+## WHICH ONES ARE POSITIVELY CORR IN BOTH BAL & NASAL?
+ddcor_res1_sub <- ddcor_res[which(ddcor_res$BAL_cor>=0.5),]
+ddcor_res1_sub <- ddcor_res1_sub[which(ddcor_res1_sub$Nasal_cor>=0.5),]
+ddcor_res1_sub <- ddcor_res1_sub[which(ddcor_res1_sub$pValDiff_adj>=0.05),]
+head(ddcor_res1_sub)
+    ## eg: IL2/STAT5 & Coagulation
+    ## eg: hypoxia & inflammatory response
+
+
+## WHICH ONES ARE POSITIVELY CORR IN BAL NOT NASAL?
+ddcor_res1_sub <- ddcor_res[which(ddcor_res$BAL_cor>=0.5),]
+ddcor_res1_sub <- ddcor_res1_sub[which(abs(ddcor_res1_sub$Nasal_cor)<=0.1),]
+head(ddcor_res1_sub)
+degs <- unique(c(ddcor_res1_sub$Gene1, ddcor_res1_sub$Gene2))      # 32 OF 50 PATHWAYS
+    ## eg: 
+  
+## WHICH ONES ARE POSITIVELY CORR IN NASAL NOT BAL?
+ddcor_res1_sub <- ddcor_res[which(ddcor_res$Nasal_cor>=0.5),]
+ddcor_res1_sub <- ddcor_res1_sub[which(abs(ddcor_res1_sub$BAL_cor)<=0.1),]
+head(ddcor_res1_sub)
+degs <- unique(c(ddcor_res1_sub$Gene1, ddcor_res1_sub$Gene2))      # 7 OF 50 PATHWAYS
+    ## eg: Coagulation & Myogenesis
+    
+
+
+# PLOT
+custom_theme <- theme(
+    panel.background = element_rect(fill = "white", color= "black"),
+    panel.border = element_blank(),  # Remove default border
+    #panel.grid = element_blank(),   # Remove grid lines if needed
+    axis.line.x.bottom = element_line(color = "black"),  # Bottom line
+    axis.line.y.left = element_line(color = "black"),    # Left line
+    axis.line.x.top = element_blank(),    # No top line
+    axis.line.y.right = element_blank(),  # No right line
+    axis.ticks.length = unit(3, "pt"),     # Optional: Adjust tick size
+    legend.position = "none"
+  )
+
+
+
+p1 <- plotCors(inputMat = gsva_merge, design = design, compare = c("BAL", "Nasal"), geneA = "HALLMARK_INFLAMMATORY_RESPONSE", geneB = "HALLMARK_HYPOXIA")  + custom_theme + scale_color_manual(name=c("BAL", "Blood"), values = c("cornflowerblue", "brown3"))
+
+#p2 <- plotCors(inputMat = gsva_merge, design = design, compare = c("BAL", "Nasal"), geneA = "HALLMARK_INFLAMMATORY_RESPONSE", geneB = "HALLMARK_REACTIVE_OXYGEN_SPECIES_PATHWAY")  + custom_theme + scale_color_manual(name=c("BAL", "Blood"), values = c("cornflowerblue", "brown3"))
+
+plotCors(inputMat = gsva_merge, design = design, compare = c("BAL", "Nasal"), geneA = "HALLMARK_TNFA_SIGNALING_VIA_NFKB", geneB = "HALLMARK_CHOLESTEROL_HOMEOSTASIS")  + custom_theme + scale_color_manual(name=c("BAL", "Blood"), values = c("cornflowerblue", "brown3"))
+
+p2 <- plotCors(inputMat = gsva_merge, design = design, compare = c("BAL", "Nasal"), geneA = "HALLMARK_IL6_JAK_STAT3_SIGNALING", geneB = "HALLMARK_DNA_REPAIR")  + custom_theme + scale_color_manual(name=c("BAL", "Blood"), values = c("cornflowerblue", "brown3"))
+
+plot_grid(p1, p2, ncol=1, align="v")
+
+plotCors(inputMat = gsva_merge, design = design, compare = c("BAL", "Nasal"), geneA = "HALLMARK_APICAL_JUNCTION", geneB = "HALLMARK_PEROXISOME")  + custom_theme + scale_color_manual(name=c("BAL", "Blood"), values = c("cornflowerblue", "brown3"))
+
+
+df <- read.csv("ddcor_res_balvsnasal_082025_msigdbhallmark.csv", header=TRUE, row.names=1, check.names=FALSE)
+df_long <- df %>%
+  pivot_longer(
+    cols = c(BAL_cor, Nasal_cor), # columns to pivot
+    names_to = "variable",     # new column for old column names
+    values_to = "value"        # new column for values
+  )
+
+library(ggplot2)
+library(ggridges)
+ggplot(df_long, aes(x = value, y = variable, fill = variable)) +
+  geom_density_ridges() +
+  theme_minimal() +
+  labs(title = "Ridge Plot Example", x = "Value", y = "Group")
+
+
+ggplot(df, aes(x = zScoreDiff)) + geom_density(fill = "red", alpha = 0.2) + theme(legend.position="none", plot.title = element_text(face = "bold", hjust = 0.5)) + labs(title="BAL-NP Gene-Gene Correlation", x="Spearman Correlation Coefficient") + geom_vline(xintercept = 0, linetype = "dashed", linewidth = 0.5, alpha = 0.7)  + custom_theme #geom_histogram(aes(y = ..density..), binwidth = 0.025, fill = "blue", alpha = 0.4)
+df
+
+ggplot(df, aes(x = BAL_cor, y = Nasal_cor, color=-log10(pValDiff_adj))) + geom_point( ) +
+  labs(x = "Nasal", y = "BAL CXCL8", title = "Upper-Lower Airway Correlation") +
+  geom_vline(xintercept = 0, linetype = "dashed", linewidth = 0.5, alpha = 0.7) +
+  geom_hline(yintercept = 0, linetype = "dashed", linewidth = 0.5, alpha = 0.7) +
+  scale_color_gradient(low = "blue", high = "red")
+
+df$BAL_fdr <- p.adjust(df$BAL_pVal, method="fdr")
+df$Nasal_fdr <- p.adjust(df$Nasal_pVal, method="fdr")
+df <- df %>%  mutate(newvar = case_when(
+      BAL_fdr < 0.05 & Nasal_fdr < 0.05 ~ 0,  # both < 0.05
+      BAL_fdr < 0.05 | Nasal_fdr < 0.05 ~ 1,  # one < 0.05
+      TRUE                                  ~ 2   # none < 0.05
+    ))
+#write.csv(df, "df_090825.csv")
+ggplot(df, aes(x = Nasal_cor, y = BAL_cor, color=zScoreDiff)) + geom_point(size=1.4) + ylim(-1,1) + xlim(-1,1) +
+  labs(x = "Nasal", y = "BAL", title = "Upper-Lower Airway Correlation") +
+  geom_vline(xintercept = 0, linetype = "dashed", linewidth = 0.5, alpha = 0.7) +
+  geom_hline(yintercept = 0, linetype = "dashed", linewidth = 0.5, alpha = 0.7) +
+  scale_color_gradient(high = "#D9027D", low = "#00A3E0") # + custom_theme
+
+
+df_counts <- df %>%
+  filter(pValDiff_adj < 0.05) %>% filter(Nasal_cor < -0.5 & BAL_cor >-0.1) %>%
+  select(Gene1, Gene2) %>%
+  pivot_longer(c(Gene1, Gene2), names_to = "which_gene", values_to = "gene") %>%
+  tidyr::drop_na(gene) %>%
+  mutate(gene = as.character(gene)) %>%
+  group_by(gene) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  arrange(desc(n))
+print(df_counts)  
+
+## (BAL_cor > 0.5 & Nasal_cor <0.1)    # high BAL
+## (BAL_cor < -0.5 & Nasal_cor >-0.1)  # low BAL
+## (Nasal_cor > 0.5 & BAL_cor <0.1)    # high Nasal
+## (Nasal_cor < -0.5 & BAL_cor >-0.1)  # low Nasal
+```
+# ... Healthy
+``` {r}
+
+# set comparison
+rownames(bal_gsva_healthy) <- paste0(rownames(bal_gsva_healthy), "_BAL")
+rownames(nasal_gsva_healthy) <- paste0(rownames(nasal_gsva_healthy), "_Nasal")
+
+df <- rbind(bal_gsva_healthy, nasal_gsva_healthy)
+
+# set comparison
+sampletype <- c(rep("BAL", 17), rep("Nasal", 17))
+
+design <- model.matrix(~sampletype + 0)
+colnames(design) = c("BAL", "Nasal")
+
+# run 
+brewer=rgb(colorRamp(c("blue", "cornflowerblue", "white", "pink", "red"), space="rgb", interpolate="linear")(0:255/255), maxColorValue=255)
+ddcor_res = ddcorAll(inputMat = t(df), design = design, compare = c("BAL", "Nasal"), adjust = "fdr", nPerm = 0, corrType="spearman", heatmapPlot=TRUE, cexRow=0.4, cexCol=0.4, sepwidth=c(0,0), col=colorRampPalette(brewer))
+head(ddcor_res)
+
+#write.csv(ddcor_res, "ddcor_res_balvsnasal_HEALTHY_031726_msigdbhallmark.csv")
+
+
+## WHICH ONES ARE POSITIVELY CORR IN BOTH BAL & NASAL?
+ddcor_res1_sub <- ddcor_res[which(ddcor_res$BAL_cor>=0.5),]
+ddcor_res1_sub <- ddcor_res1_sub[which(ddcor_res1_sub$Nasal_cor>=0.5),]
+ddcor_res1_sub <- ddcor_res1_sub[which(ddcor_res1_sub$pValDiff_adj>=0.05),]
+head(ddcor_res1_sub)
+    ## eg: IL2/STAT5 & Coagulation
+    ## eg: hypoxia & inflammatory response
+
+
+## WHICH ONES ARE POSITIVELY CORR IN BAL NOT NASAL?
+ddcor_res1_sub <- ddcor_res[which(ddcor_res$BAL_cor>=0.5),]
+ddcor_res1_sub <- ddcor_res1_sub[which(abs(ddcor_res1_sub$Nasal_cor)<=0.1),]
+head(ddcor_res1_sub)
+degs <- unique(c(ddcor_res1_sub$Gene1, ddcor_res1_sub$Gene2))      # 32 OF 50 PATHWAYS
+    ## eg: 
+  
+## WHICH ONES ARE POSITIVELY CORR IN NASAL NOT BAL?
+ddcor_res1_sub <- ddcor_res[which(ddcor_res$Nasal_cor>=0.5),]
+ddcor_res1_sub <- ddcor_res1_sub[which(abs(ddcor_res1_sub$BAL_cor)<=0.1),]
+head(ddcor_res1_sub)
+degs <- unique(c(ddcor_res1_sub$Gene1, ddcor_res1_sub$Gene2))      # 7 OF 50 PATHWAYS
+    ## eg: Coagulation & Myogenesis
+    
+
+
+# PLOT
+custom_theme <- theme(
+    panel.background = element_rect(fill = "white", color= "black"),
+    panel.border = element_blank(),  # Remove default border
+    #panel.grid = element_blank(),   # Remove grid lines if needed
+    axis.line.x.bottom = element_line(color = "black"),  # Bottom line
+    axis.line.y.left = element_line(color = "black"),    # Left line
+    axis.line.x.top = element_blank(),    # No top line
+    axis.line.y.right = element_blank(),  # No right line
+    axis.ticks.length = unit(3, "pt"),     # Optional: Adjust tick size
+    legend.position = "none"
+  )
+
+
+
+p1 <- plotCors(inputMat = gsva_merge, design = design, compare = c("BAL", "Nasal"), geneA = "HALLMARK_INFLAMMATORY_RESPONSE", geneB = "HALLMARK_HYPOXIA")  + custom_theme + scale_color_manual(name=c("BAL", "Blood"), values = c("cornflowerblue", "brown3"))
+
+#p2 <- plotCors(inputMat = gsva_merge, design = design, compare = c("BAL", "Nasal"), geneA = "HALLMARK_INFLAMMATORY_RESPONSE", geneB = "HALLMARK_REACTIVE_OXYGEN_SPECIES_PATHWAY")  + custom_theme + scale_color_manual(name=c("BAL", "Blood"), values = c("cornflowerblue", "brown3"))
+
+plotCors(inputMat = gsva_merge, design = design, compare = c("BAL", "Nasal"), geneA = "HALLMARK_TNFA_SIGNALING_VIA_NFKB", geneB = "HALLMARK_CHOLESTEROL_HOMEOSTASIS")  + custom_theme + scale_color_manual(name=c("BAL", "Blood"), values = c("cornflowerblue", "brown3"))
+
+p2 <- plotCors(inputMat = gsva_merge, design = design, compare = c("BAL", "Nasal"), geneA = "HALLMARK_IL6_JAK_STAT3_SIGNALING", geneB = "HALLMARK_DNA_REPAIR")  + custom_theme + scale_color_manual(name=c("BAL", "Blood"), values = c("cornflowerblue", "brown3"))
+
+plot_grid(p1, p2, ncol=1, align="v")
+
+plotCors(inputMat = gsva_merge, design = design, compare = c("BAL", "Nasal"), geneA = "HALLMARK_APICAL_JUNCTION", geneB = "HALLMARK_PEROXISOME")  + custom_theme + scale_color_manual(name=c("BAL", "Blood"), values = c("cornflowerblue", "brown3"))
+
+
+df <- read.csv("ddcor_res_balvsnasal_082025_msigdbhallmark.csv", header=TRUE, row.names=1, check.names=FALSE)
+df_long <- df %>%
+  pivot_longer(
+    cols = c(BAL_cor, Nasal_cor), # columns to pivot
+    names_to = "variable",     # new column for old column names
+    values_to = "value"        # new column for values
+  )
+
+library(ggplot2)
+library(ggridges)
+ggplot(df_long, aes(x = value, y = variable, fill = variable)) +
+  geom_density_ridges() +
+  theme_minimal() +
+  labs(title = "Ridge Plot Example", x = "Value", y = "Group")
+
+
+ggplot(df, aes(x = zScoreDiff)) + geom_density(fill = "red", alpha = 0.2) + theme(legend.position="none", plot.title = element_text(face = "bold", hjust = 0.5)) + labs(title="BAL-NP Gene-Gene Correlation", x="Spearman Correlation Coefficient") + geom_vline(xintercept = 0, linetype = "dashed", linewidth = 0.5, alpha = 0.7)  + custom_theme #geom_histogram(aes(y = ..density..), binwidth = 0.025, fill = "blue", alpha = 0.4)
+df
+
+ggplot(df, aes(x = BAL_cor, y = Nasal_cor, color=-log10(pValDiff_adj))) + geom_point( ) +
+  labs(x = "Nasal", y = "BAL CXCL8", title = "Upper-Lower Airway Correlation") +
+  geom_vline(xintercept = 0, linetype = "dashed", linewidth = 0.5, alpha = 0.7) +
+  geom_hline(yintercept = 0, linetype = "dashed", linewidth = 0.5, alpha = 0.7) +
+  scale_color_gradient(low = "blue", high = "red")
+
+df$BAL_fdr <- p.adjust(df$BAL_pVal, method="fdr")
+df$Nasal_fdr <- p.adjust(df$Nasal_pVal, method="fdr")
+df <- df %>%  mutate(newvar = case_when(
+      BAL_fdr < 0.05 & Nasal_fdr < 0.05 ~ 0,  # both < 0.05
+      BAL_fdr < 0.05 | Nasal_fdr < 0.05 ~ 1,  # one < 0.05
+      TRUE                                  ~ 2   # none < 0.05
+    ))
+#write.csv(df, "df_090825.csv")
+ggplot(df, aes(x = Nasal_cor, y = BAL_cor, color=zScoreDiff)) + geom_point(size=1.4) + ylim(-1,1) + xlim(-1,1) +
+  labs(x = "Nasal", y = "BAL", title = "Upper-Lower Airway Correlation") +
+  geom_vline(xintercept = 0, linetype = "dashed", linewidth = 0.5, alpha = 0.7) +
+  geom_hline(yintercept = 0, linetype = "dashed", linewidth = 0.5, alpha = 0.7) +
+  scale_color_gradient(high = "#D9027D", low = "#00A3E0") # + custom_theme
+
+
+df_counts <- df %>%
+  filter(pValDiff_adj < 0.05) %>% filter(Nasal_cor < -0.5 & BAL_cor >-0.1) %>%
+  select(Gene1, Gene2) %>%
+  pivot_longer(c(Gene1, Gene2), names_to = "which_gene", values_to = "gene") %>%
+  tidyr::drop_na(gene) %>%
+  mutate(gene = as.character(gene)) %>%
+  group_by(gene) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  arrange(desc(n))
+print(df_counts)  
+
+## (BAL_cor > 0.5 & Nasal_cor <0.1)    # high BAL
+## (BAL_cor < -0.5 & Nasal_cor >-0.1)  # low BAL
+## (Nasal_cor > 0.5 & BAL_cor <0.1)    # high Nasal
+## (Nasal_cor < -0.5 & BAL_cor >-0.1)  # low Nasal
+```
+
+# Analysis 2c - cross-site correlations
+#... BMT
+```{r}
+
+# spearman loops for genes
+
+order_genes <- match(rownames(bal_genecounts_vst), rownames(nasal_genecounts_vst)) # makes all the rownames (genes) go in the same order
+nasal_genecounts_vst <- nasal_genecounts_vst[order_genes,]
+bal_genecounts_vst <- bal_genecounts_vst[order_genes,]
+
+nrow(nasal_genecounts_vst)
+nrow(bal_genecounts_vst)
+ncol(nasal_genecounts_vst)
+ncol(bal_genecounts_vst)
+
+bal_genecounts_vst_t <- as.data.frame(t(bal_genecounts_vst))
+nasal_genecounts_vst_t <- as.data.frame(t(nasal_genecounts_vst))
+
+# Prepare an empty data frame to store results.
+genegenecorr_results <- data.frame(column = character(), correlation = numeric(), p_value = numeric())
+
+# Loop through each column
+cols <- colnames(bal_genecounts_vst)
+for (i in seq_along(cols)) {
+  col <- cols[i]
+  message(sprintf("[%d/%d] Working on: %s", i, length(cols), col))
+  flush.console()
+  test_result <- cor.test(bal_genecounts_vst[[col]], nasal_genecounts_vst[[col]], method = "spearman")
+  genegenecorr_results <- rbind(genegenecorr_results, data.frame(column = col, correlation = test_result$estimate, p_value = test_result$p.value)) # store the results in the empty df
+}
+
+head(genegenecorr_results)
+genegenecorr_results$fdr <- p.adjust(genegenecorr_results$p_value, method="fdr")
+#write.csv(genegenecorr_results, "bal_np_genegene_spearmancorr_082025.csv")
+
+
+
+
+
+# Look at the general distribution (spread) of the correlation values.
+genegenecorr_results <- read.csv("bal_np_genegene_spearmancorr_082025.csv", header=TRUE, row.names=1, check.names=FALSE)
+hist(genegenecorr_results$correlation)
+summary(genegenecorr_results$correlation)
+
+p1 <- ggplot(genegenecorr_results, aes(x = correlation)) + geom_density(fill = "red", alpha = 0.2) + theme(legend.position="none", plot.title = element_text(face = "bold", hjust = 0.5)) + labs(title="BAL-NP Gene-Gene Correlation", x="Spearman Correlation Coefficient") + xlim(-1,1) + geom_vline(xintercept = 0, linetype = "dashed", linewidth = 0.5, alpha = 0.7)  + custom_theme #geom_histogram(aes(y = ..density..), binwidth = 0.025, fill = "blue", alpha = 0.4)
+
+    
+
+#### repeat loop for MSIGDB hallmark gene sets
+# Prepare an empty data frame to store results.
+genegenecorr_results <- data.frame(column = character(), correlation = numeric(), p_value = numeric())
+
+cols <- colnames(bal_gsva)
+for (i in seq_along(cols)) {
+  col <- cols[i]
+  message(sprintf("[%d/%d] Working on: %s", i, length(cols), col))
+  flush.console()
+  test_result <- cor.test(bal_gsva[[col]], nasal_gsva[[col]], method = "spearman")
+  genegenecorr_results <- rbind(genegenecorr_results, data.frame(column = col, correlation = test_result$estimate, p_value = test_result$p.value)) # store the results in the empty df
+}
+
+head(genegenecorr_results)
+genegenecorr_results$fdr <- p.adjust(genegenecorr_results$p_value, method="fdr")
+#write.csv(genegenecorr_results, "bal_np_genesetgeneset_spearmancorr_082025.csv")
+
+# Look at the general distribution (spread) of the correlation values.
+genegenecorr_results <- read.csv("bal_np_genegene_spearmancorr_082025.csv", header=TRUE, row.names=1, check.names=FALSE)
+hist(genegenecorr_results$correlation)
+summary(genegenecorr_results$correlation)
+
+ggplot(genegenecorr_results, aes(x = correlation)) + geom_histogram(aes(y = ..density..), binwidth = 0.025, fill = "blue", alpha = 0.4) + geom_density(fill = "red", alpha = 0.2) + theme(legend.position="none", plot.title = element_text(face = "bold", hjust = 0.5)) + labs(title="BAL-NP Gene-Gene Correlation", x="Spearman Correlation Coefficient") + xlim(-0.5,0.5)
+
+
+
+
+#### correlate cell fractions
+colnames(bal_cells) <- paste("BAL_", colnames(bal_cells), sep="")
+colnames(nasal_cells) <- paste("Nasal_", colnames(nasal_cells), sep="")
+
+rcorr <- rcorr(x=as.matrix(bal_cells), y=as.matrix(nasal_cells), type="spearman")
+rcorr_final_spearman <- melt(rcorr$r)
+colnames(rcorr_final_spearman)[colnames(rcorr_final_spearman) == "Var1"] <- "BAL Cells"
+colnames(rcorr_final_spearman)[colnames(rcorr_final_spearman) == "Var2"] <- "Nasal Cells"
+rcorr_final_punadj <- melt(rcorr$P)
+rcorr_final_spearman$p_unadj <- rcorr_final_punadj$value
+rcorr_final_spearman <- rcorr_final_spearman[grepl("BAL",rcorr_final_spearman$`BAL Cells`),] #KEEP if has __ in var1
+rcorr_final_spearman <- rcorr_final_spearman[!grepl("BAL",rcorr_final_spearman$`Nasal Cells`),] #DISCARD if __ in var2
+rcorr_final_spearman <- rcorr_final_spearman %>% distinct() # keep only distinct AKA remove duplicates (still keeps 1st instance of each)
+rcorr_final_spearman$fdr <- p.adjust(rcorr_final_spearman$p_unadj, method="fdr")
+rcorr_final_spearman <- na.omit(rcorr_final_spearman)
+#write.csv(rcorr_final_spearman, "bal_np_cellcell_spearmancorr_082025.csv")
+
+
+## what is the med/IQR/range of correlations?
+summary(rcorr_final_spearman$value)
+
+
+## give examples:
+df <- bal_cells
+df$Nasal_CXCL8 <- nasal_genecounts_vst$CXCL8
+df$BAL_CXCL8 <- bal_genecounts_vst$CXCL8
+df$Nasal_HALLMARK_HYPOXIA <- nasal_gsva$HALLMARK_HYPOXIA
+df$BAL_HALLMARK_HYPOXIA <- bal_gsva$HALLMARK_HYPOXIA
+df$Nasal_Neutrophil <- nasal_cells$Myeloid...Neutrophil
+df$BAL_Neutrophil <- bal_cells$Myeloid...Neutrophil
+df$Nasal_CD8Tcell <- nasal_cells$Lymphoid...CD8.T.cell
+df$BAL_CD8Tcell <- bal_cells$Lymphoid...CD8.T.cell
+
+p2 <- ggplot(df, aes(x = Nasal_CXCL8, y = BAL_CXCL8)) + # make scatterplot
+  geom_point( ) + labs(x = "Nasal CXCL8", y = "BAL CXCL8", title = "Upper-Lower Airway Correlation") + custom_theme
+
+
+p3 <- ggplot(df, aes(x = Nasal_HALLMARK_HYPOXIA, y = BAL_HALLMARK_HYPOXIA)) + # make scatterplot
+  geom_point( ) + labs(x = "Nasal HALLMARK_HYPOXIA", y = "BAL HALLMARK_HYPOXIA", title = "Upper-Lower Airway Correlation") + custom_theme
+
+#ggplot(df, aes(x = Nasal_Neutrophil, y = BAL_Neutrophil)) + # make scatterplot
+  geom_point( ) + labs(x = "Nasal Neutrophil Fraction", y = "BAL Neutrophil Fraction", title = "Upper-Lower Airway Correlation") +
+  theme_minimal( ) + xlim(0,0.5) + ylim(0,0.5)
+
+p4 <- ggplot(df, aes(x = Nasal_Neutrophil, y = BAL_Neutrophil)) + # make scatterplot
+  geom_point( ) + labs(x = "Nasal Neutrophil Fraction", y = "BAL Neutrophil Fraction", title = "Upper-Lower Airway Correlation") +
+   custom_theme + scale_x_continuous(trans='log10', oob = scales::squish_infinite, limits=c(0.01,1))  + scale_y_continuous(trans='log10', oob = scales::squish_infinite, limits=c(0.01,1)) 
+
+#ggplot(df, aes(x = log10(Nasal_Neutrophil+0.01), y = log10(BAL_Neutrophil+0.01))) + # make scatterplot
+  geom_point( ) + labs(x = "Nasal Neutrophil Fraction", y = "BAL Neutrophil Fraction", title = "Upper-Lower Airway Correlation") +
+  theme_minimal( ) + xlim(-2,0) + ylim(-2,0) 
+
+df$Nasal_CD8T <- nasal_cells$Nasal_Lymphoid...CD8.T.cell
+df$BAL_CD8T <- bal_cells$BAL_Lymphoid...CD8.T.cell
+
+ggplot(df, aes(x = Nasal_CD8T, y = BAL_CD8T)) + # make scatterplot
+  geom_point( ) + labs(x = "Nasal CD8+ T-Cell Fraction", y = "BAL CD8+ T-Cell Fraction", title = "Upper-Lower Airway Correlation") +
+  theme_minimal( )
+
+#p4 <- ggplot(df, aes(x = Nasal_CD8Tcell, y = BAL_CD8Tcell)) + # make scatterplot
+  geom_point( ) + labs(x = "Nasal CD8+ T-Cell Fraction", y = "BAL CD8+ T-Cell Fraction", title = "Upper-Lower Airway Correlation") +
+  theme_minimal( ) + scale_x_continuous(trans='log10', oob = scales::squish_infinite, limits=c(0.01,1))  + scale_y_continuous(trans='log10', oob = scales::squish_infinite, limits=c(0.01,1)) 
+
+plot_grid(p1, p2, p3, p4, ncol=2, align="v")
+
+```
+#... Healthy
+```{r}
+
+bal_genecounts_healthy_vst <- as.data.frame(varianceStabilizingTransformation(as.matrix(t(round(bal_genecounts_healthy)))))  ## samples in columns
+nasal_genecounts_healthy_vst <- as.data.frame(varianceStabilizingTransformation(as.matrix(t(round(nasal_genecounts_healthy)))))  ## samples in columns
+
+bal_genecounts_healthy_vst <- as.data.frame(t(bal_genecounts_healthy_vst))
+nasal_genecounts_healthy_vst <- as.data.frame(t(nasal_genecounts_healthy_vst))
+
+bal_genecounts_healthy_vst_intersect <- bal_genecounts_healthy_vst %>% select(intersect(colnames(bal_genecounts_healthy_vst), colnames(nasal_genecounts_healthy_vst)))
+nasal_genecounts_healthy_vst_intersect <- nasal_genecounts_healthy_vst %>% select(intersect(colnames(bal_genecounts_healthy_vst), colnames(nasal_genecounts_healthy)))
+
+
+
+# Prepare an empty data frame to store results.
+genegenecorr_results <- data.frame(column = character(), correlation = numeric(), p_value = numeric())
+
+# Loop through each column
+cols <- colnames(bal_genecounts_healthy_vst_intersect)
+for (i in seq_along(cols)) {
+  col <- cols[i]
+  message(sprintf("[%d/%d] Working on: %s", i, length(cols), col))
+  flush.console()
+  test_result <- cor.test(bal_genecounts_healthy_vst_intersect[[col]], nasal_genecounts_healthy_vst_intersect[[col]], method = "spearman")
+  genegenecorr_results <- rbind(genegenecorr_results, data.frame(column = col, correlation = test_result$estimate, p_value = test_result$p.value)) # store the results in the empty df
+}
+
+head(genegenecorr_results)
+genegenecorr_results$fdr <- p.adjust(genegenecorr_results$p_value, method="fdr")
+write.csv(genegenecorr_results, "bal_nasal_genegene_spearmancorr_healthy_031726.csv")
+
+hist(genegenecorr_results$correlation)
+summary(genegenecorr_results$correlation)
+
+p1 <- ggplot(genegenecorr_results, aes(x = correlation)) + geom_density(fill = "red", alpha = 0.2) + theme(legend.position="none", plot.title = element_text(face = "bold", hjust = 0.5)) + labs(title="BAL-NP Gene-Gene Correlation", x="Spearman Correlation Coefficient") + xlim(-1,1) + geom_vline(xintercept = 0, linetype = "dashed", linewidth = 0.5, alpha = 0.7) # + custom_theme #geom_histogram(aes(y = ..density..), binwidth = 0.025, fill = "blue", alpha = 0.4)
+
+
+      
+      
+      # Look at the general distribution (spread) of the correlation values.
+      genegenecorr_results1 <- read.csv("../bal_np_genegene_spearmancorr_082025.csv", header=TRUE, row.names=1, check.names=FALSE)
+      hist(genegenecorr_results1$correlation)
+      summary(genegenecorr_results1$correlation)
+      genegenecorr_results$group <- "healthy"
+      genegenecorr_results1$group <- "BMT"
+      genegenecorr_results <- genegenecorr_results %>% select(intersect(colnames(genegenecorr_results), colnames(genegenecorr_results1)))
+      genegenecorr_results1 <- genegenecorr_results1 %>% select(intersect(colnames(genegenecorr_results), colnames(genegenecorr_results1)))
+      mayley <- rbind(genegenecorr_results, genegenecorr_results1)
+      ggplot(mayley, aes(x = correlation, fill=as.factor(group))) + geom_density(aes(y = ..scaled..), alpha = 0.2, position = "identity") + theme(legend.position="none", plot.title = element_text(face = "bold", hjust = 0.5)) + labs(title="BAL-NP Gene-Gene Correlation", x="Spearman Correlation Coefficient") + xlim(-1,1) + geom_vline(xintercept = 0, linetype = "dashed", linewidth = 0.5, alpha = 0.7)  #+ custom_theme #geom_histogram(aes(y = ..density..), binwidth = 0.025, fill = "blue", alpha = 0.4)
+      
+      
+      
+      
+##### PLOT HEALTHIES WITH BMTS
+bal_genecounts_combined <- rbind(bal_genecounts[, intersect(names(bal_genecounts), names(bal_genecounts_healthy))],
+                     bal_genecounts_healthy[, intersect(names(bal_genecounts), names(bal_genecounts_healthy))])
+bal_genecounts_combined_vst <- as.data.frame(varianceStabilizingTransformation(as.matrix(t(round(bal_genecounts_combined)))))  ## samples in columns
+bal_genecounts_combined_vst <- as.data.frame(t(bal_genecounts_combined_vst))
+
+nasal_genecounts_combined <- rbind(nasal_genecounts[, intersect(names(nasal_genecounts), names(nasal_genecounts_healthy))],
+                     nasal_genecounts_healthy[, intersect(names(nasal_genecounts), names(nasal_genecounts_healthy))])
+nasal_genecounts_combined_vst <- as.data.frame(varianceStabilizingTransformation(as.matrix(t(round(nasal_genecounts_combined)))))  ## samples in columns
+nasal_genecounts_combined_vst <- as.data.frame(t(nasal_genecounts_combined_vst))
+
+df <- rbind(
+  data.frame(rowname = rownames(bal_genecounts), sample_type = "BMT"),
+  data.frame(rowname = rownames(bal_genecounts_healthy), sample_type = "healthy"))
+
+df$CXCL8_BAL <- bal_genecounts_combined_vst$CXCL8
+df$CXCL8_nasal <- nasal_genecounts_combined_vst$CXCL8
+
+p2 <- ggplot(df, aes(x = CXCL8_BAL, y = CXCL8_nasal, color=as.factor(sample_type))) + # make scatterplot
+  geom_point( ) + labs(x = "BAL CXCL8", y = "Nasal CXCL8", title = "Upper-Lower Airway Correlation")# + custom_theme
+
+df$CEACAM6_BAL <- bal_genecounts_combined_vst$CEACAM6
+df$CEACAM6_nasal <- nasal_genecounts_combined_vst$CEACAM6
+
+p3 <- ggplot(df, aes(x = CEACAM6_BAL, y = CEACAM6_nasal, color=as.factor(sample_type))) + # make scatterplot
+  geom_point( ) + labs(x = "BAL CEACAM6", y = "Nasal CEACAM6", title = "Upper-Lower Airway Correlation")# + custom_theme
+
+
+
+#### MSIGDB PATHWAY ANALYSIS
+gsva_obj <- gsvaParam(t(bal_genecounts_healthy), msigdb, kcdf="auto")
+bal_gsva_healthy <- gsva(gsva_obj, verbose=TRUE)
+bal_gsva_healthy <- as.data.frame(t(bal_gsva_healthy))
+
+gsva_obj <- gsvaParam(t(nasal_genecounts_healthy), msigdb, kcdf="auto")
+nasal_gsva_healthy <- gsva(gsva_obj, verbose=TRUE)
+nasal_gsva_healthy <- as.data.frame(t(nasal_gsva_healthy))
+
+
+# Prepare an empty data frame to store results.
+genegenecorr_results <- data.frame(column = character(), correlation = numeric(), p_value = numeric())
+
+# Loop through each column
+cols <- colnames(bal_gsva_healthy)
+for (i in seq_along(cols)) {
+  col <- cols[i]
+  message(sprintf("[%d/%d] Working on: %s", i, length(cols), col))
+  flush.console()
+  test_result <- cor.test(bal_gsva_healthy[[col]], nasal_gsva_healthy[[col]], method = "spearman")
+  genegenecorr_results <- rbind(genegenecorr_results, data.frame(column = col, correlation = test_result$estimate, p_value = test_result$p.value)) # store the results in the empty df
+}
+
+head(genegenecorr_results)
+genegenecorr_results$fdr <- p.adjust(genegenecorr_results$p_value, method="fdr")
+#write.csv(genegenecorr_results, "healthy_balvsnasal_gsva_msigdb_031626.csv")
+
+
+hist(genegenecorr_results$correlation)
+summary(genegenecorr_results$correlation)
+
+ggplot(genegenecorr_results, aes(x = correlation)) + geom_density(fill = "red", alpha = 0.2) + theme(legend.position="none", plot.title = element_text(face = "bold", hjust = 0.5)) + labs(title="BAL-NP Gene-Gene Correlation", x="Spearman Correlation Coefficient") + xlim(-1,1) + geom_vline(xintercept = 0, linetype = "dashed", linewidth = 0.5, alpha = 0.7) # + custom_theme #geom_histogram(aes(y = ..density..), binwidth = 0.025, fill = "blue", alpha = 0.4)
+#write.csv(gsva_out, "healthy_balvsnasal_gsva_msigdb_031626.csv")
+
+
+
+
+##### PLOT HEALTHIES WITH BMTS
+msigdb <- read.gmt("h.all.v2023.2.Hs.symbols.gmt")
+gsva_obj <- gsvaParam(t(bal_genecounts_combined), msigdb, kcdf="auto")
+gsva_out <- gsva(gsva_obj, verbose=TRUE)
+gsva_out <- as.data.frame(t(gsva_out))
+gsva_BAL <- gsva_out
+
+gsva_obj <- gsvaParam(t(nasal_genecounts_combined), msigdb, kcdf="auto")
+gsva_out <- gsva(gsva_obj, verbose=TRUE)
+gsva_out <- as.data.frame(t(gsva_out))
+gsva_Nasal <- gsva_out
+
+df <- rbind(
+  data.frame(rowname = rownames(bal_genecounts), sample_type = "BMT"),
+  data.frame(rowname = rownames(bal_genecounts_healthy), sample_type = "healthy"))
+
+df$HALLMARK_INFLAMMATORY_RESPONSE_BAL <- gsva_BAL$HALLMARK_INFLAMMATORY_RESPONSE
+df$HALLMARK_INFLAMMATORY_RESPONSE_nasal <- gsva_Nasal$HALLMARK_INFLAMMATORY_RESPONSE
+
+p4 <- ggplot(df, aes(x = HALLMARK_INFLAMMATORY_RESPONSE_BAL, y = HALLMARK_INFLAMMATORY_RESPONSE_nasal, color=as.factor(sample_type))) + # make scatterplot
+  geom_point( ) + labs(x = "BAL HALLMARK_INFLAMMATORY_RESPONSE", y = "Nasal HALLMARK_INFLAMMATORY_RESPONSE", title = "Upper-Lower Airway Correlation")# + custom_theme
+
+df$HALLMARK_COMPLEMENT_BAL <- gsva_BAL$HALLMARK_COMPLEMENT_BAL
+df$HALLMARK_COMPLEMENT_Nasal <- gsva_Nasal$HALLMARK_COMPLEMENT_Nasal
+
+ggplot(df, aes(x = HALLMARK_COMPLEMENT_BAL, y = HALLMARK_COMPLEMENT_Nasal, color=as.factor(sample_type))) + # make scatterplot
+  geom_point( ) + labs(x = "BAL HALLMARK_COMPLEMENT", y = "Nasal HALLMARK_COMPLEMENT", title = "Upper-Lower Airway Correlation")# + custom_theme
+
+
+df$HALLMARK_HYPOXIA_BAL <- gsva_BAL$HALLMARK_HYPOXIA
+df$HALLMARK_HYPOXIA_nasal <- gsva_Nasal$HALLMARK_HYPOXIA
+
+p5 <- ggplot(df, aes(x = HALLMARK_HYPOXIA_BAL, y = HALLMARK_HYPOXIA_nasal, color=as.factor(sample_type))) + # make scatterplot
+  geom_point( ) + labs(x = "BAL HALLMARK_HYPOXIA", y = "Nasal HALLMARK_HYPOXIA", title = "Upper-Lower Airway Correlation")# + custom_theme
+
+plot_grid(p2, p3, p4, p5, ncol=2, align="v")
+
+
+
+### contrast gene counts
+all_genecounts_combined_vst <- rbind(bal_genecounts_combined_vst[, intersect(names(bal_genecounts_combined_vst), names(nasal_genecounts_combined_vst))],
+                     nasal_genecounts_combined_vst[, intersect(names(bal_genecounts_combined_vst), names(nasal_genecounts_combined_vst))])
+
+bal_genecounts_combined_vst_filt <- bal_genecounts_combined_vst[, names(bal_genecounts_combined_vst)[names(bal_genecounts_combined_vst) %in% intersect(names(bal_genecounts_combined_vst), names(nasal_genecounts_combined_vst))], drop = FALSE]
+
+nasal_genecounts_combined_vst_filt <- nasal_genecounts_combined_vst[, names(nasal_genecounts_combined_vst)[names(nasal_genecounts_combined_vst) %in% intersect(names(bal_genecounts_combined_vst), names(nasal_genecounts_combined_vst))], drop = FALSE]
+
+colnames(bal_genecounts_combined_vst_filt) <- paste0(colnames(bal_genecounts_combined_vst_filt), "_BAL")
+colnames(nasal_genecounts_combined_vst_filt) <- paste0(colnames(nasal_genecounts_combined_vst_filt), "_Nasal")
+
+df <- merge(bal_genecounts_combined_vst_filt, nasal_genecounts_combined_vst_filt, by="row.names")
+df$sample_type <- c(rep("BMT", 189),
+  rep("Healthy", 17))
+
+gee_model <- glm(CSF1_BAL ~ CSF1_Nasal*as.factor(sample_type), family = gaussian, data = df)
+summary(gee_model)
+
+
+### contrast msigdb
+bal_gsva_all <- rbind(bal_gsva, bal_gsva_healthy)
+nasal_gsva_all <- rbind(nasal_gsva, nasal_gsva_healthy)
+
+colnames(bal_gsva_all) <- paste0(colnames(bal_gsva_all), "_BAL")
+colnames(nasal_gsva_all) <- paste0(colnames(nasal_gsva_all), "_Nasal")
+
+df <- merge(bal_gsva_all, nasal_gsva_all, by="row.names")
+df$sample_type <- c(rep("BMT", 189),
+  rep("Healthy", 17))
+
+gee_model <- glm(HALLMARK_COMPLEMENT_BAL ~ HALLMARK_COMPLEMENT_Nasal*as.factor(sample_type), family = gaussian, data = df)
+summary(gee_model)
+
+```
+# Analysis 2d - correlation in patient subgroups
+```{r}
+
+
+
+#### METHOD 1 - DDCOR
+
+df <- as.data.frame(gsva_merge)
+rownames(meta) <- meta$sample_id
+meta_sub <- meta
+    meta_sub <- merge(meta_sub, total_cluster, by="row.names")
+    rownames(meta_sub) <- meta_sub$Row.names
+    meta_sub <- subset(meta, select=-Row.names)
+meta_sub <- meta_sub %>% group_by(patient_id) %>% slice_max(order_by = as.numeric(age_at_study_years), n = 1) %>% ungroup()  ## this keeps most
+rownames(meta_sub) <- meta_sub$sample_id
+names1 <- paste0(rownames(meta_sub), "_BAL")
+names2 <- paste0(rownames(meta_sub), "_Nasal")
+names <- c(names1, names2)
+df <- df[names,]
+#df_BAL  <- slice(df, 1:floor(n()/2))
+df_BAL <- df[1:(nrow(df)/2), ]
+#df_nasal <- slice(df, (floor(n()/2)+1):n())
+df_nasal <- df[((nrow(df)/2)+1):nrow(df), ]
+rownames(df_BAL) <- substr(rownames(df_BAL), 1, 8)
+rownames(df_nasal) <- substr(rownames(df_nasal), 1, 8)
+colnames(df_BAL) <- paste0(colnames(df_BAL), "_BAL")
+colnames(df_nasal) <- paste0(colnames(df_nasal), "_Nasal")
+df_merge <- cbind(df_BAL, df_nasal)
+
+# set comparison
+deadorvent7d <- as.factor(meta_sub$deadorvent7d)
+table(deadorvent7d)
+design <- model.matrix(~deadorvent7d)
+colnames(design) = c("No", "Yes")
+
+### run for all genes
+ddcor_res = DGCA::ddcorAll(inputMat = t(df_merge), design = design,
+  compare = c("No", "Yes"),
+  adjust = "fdr", nPerm = 0, #nPairs=100 or leave out for no limit
+  corrType="spearman") #
+head(ddcor_res)
+
+
+# keep BAL-nasal pairs (remove BAL-BAL and nasal-nasal)
+ddcor_res_1 <- ddcor_res %>% filter(grepl("_BAL", Gene1) & grepl("_Nasal", Gene2))
+ddcor_res_1$Gene1 <- substr(ddcor_res_1$Gene1, 1, nchar(ddcor_res_1$Gene1) - 4)
+ddcor_res_1$Gene2 <- substr(ddcor_res_1$Gene2, 1, nchar(ddcor_res_1$Gene2) - 6)
+ddcor_res_1 <- ddcor_res_1 %>% dplyr::rename(Gene_BAL = Gene1)
+ddcor_res_1 <- ddcor_res_1 %>% dplyr::rename(Gene_Nasal = Gene2)
+ddcor_res_1_sub <- ddcor_res_1 %>% filter(Gene_BAL == Gene_Nasal)
+ddcor_res_1_sub$No_pVal_FDR <- p.adjust(ddcor_res_1_sub$No_pVal, method="fdr")
+ddcor_res_1_sub$Yes_pVal_FDR <- p.adjust(ddcor_res_1_sub$Yes_pVal, method="fdr")
+ddcor_res_1_sub$pValDiff_FDR <- p.adjust(ddcor_res_1_sub$pValDiff, method="fdr")
+head(ddcor_res_1_sub)
+#write.csv(ddcor_res_1_sub, "ddcor_msigdb_balvsnasal_bydeadorvent7d_082025.csv")
+
+### PLOT
+plotCors(inputMat = df_merge, design = design,
+  compare = c("No", "Yes"), geneA = "HALLMARK_INFLAMMATORY_RESPONSE_BAL", geneB = "HALLMARK_INFLAMMATORY_RESPONSE_Nasal")
+
+df_merge_t <- as.data.frame(t(df_merge))
+df_merge_t <- merge(df_merge_t, meta_sub, by="row.names")
+cor.test(df_merge_t[which(df_merge_t$deadorvent7d==1),]$HALLMARK_INTERFERON_GAMMA_RESPONSE_BAL, df_merge_t[which(df_merge_t$deadorvent7d==1),]$HALLMARK_INTERFERON_GAMMA_RESPONSE_Nasal, method="spearman")
+
+#### METHOD 3 - GLM INTERACTION TEST
+df_merge_t <- as.data.frame(t(df_merge))
+df_merge_t <- merge(df_merge_t, meta_sub, by="row.names")
+
+gee_model <- glm(HALLMARK_INFLAMMATORY_RESPONSE_BAL ~ HALLMARK_INFLAMMATORY_RESPONSE_Nasal*as.factor(deadorvent7d), family = gaussian, data = df_merge_t)
+summary(gee_model)
+
+## loop
+list1 <- rownames(df_BAL)
+list2 <- rownames(df_nasal)
+
+# list1: Y vars (BAL); list2: X vars (Nasal)
+# stop if lengths differ
+stopifnot(length(list1) == length(list2))
+
+fit_one <- function(y_var, x_var, data) {
+  # keep complete cases for just these columns
+  keep <- complete.cases(data[, c(y_var, x_var, "deadorvent7d")])
+  df    <- data[keep, , drop = FALSE]
+  if (sum(keep) < 3L) {
+    return(tibble(
+      y_var, x_var, term = NA, estimate = NA_real_, std.error = NA_real_,
+      statistic = NA_real_, p.value = NA_real_, n = sum(keep), note = "too few rows"
+    ))
+  }
+  # backticks protect non-syntactic names
+  fml <- as.formula(sprintf("`%s` ~ `%s` * as.factor(deadorvent7d)", y_var, x_var))
+  mod <- glm(fml, family = gaussian(), data = df_merge_t)
+
+  tidy(mod) %>%
+    mutate(y_var = y_var, x_var = x_var, n = nobs(mod), .before = 1)
+}
+
+results <- map2_dfr(list1, list2, fit_one, data = df_merge_t)
+results_p <- results %>%
+  filter(str_detect(term, paste0("^", x_var, ":as\\.factor\\(deadorvent7d\\)"))) %>%
+  select(y_var, x_var, n, term, estimate, std.error, statistic, p.value)
+results_p$fdr <- p.adjust(results_p$p.value, method="fdr")
+
+#write.csv(results_p, "msigdb_hallmark_balvsnasal_interactionwdeadorvent7d_081925.csv")
+
+
+```
+
+# Analysis 2e - infuence of immune reconstitution
+```{r}
+
+## check for correlation between cells and ANC and ALC?
+
+cor.test(meta$anc, nasal_cells$Nasal_Myeloid...Neutrophil, method = "spearman")
+cor.test(meta$anc, bal_cells$BAL_Myeloid...Neutrophil, method = "spearman")
+
+cor.test(meta$alc, nasal_cell_categories$Nasal_Lymphoid_sum, method = "spearman")
+cor.test(meta$alc, bal_cell_categories$BAL_Lymphoid_sum, method = "spearman")
+
+
+
+## check for genes assoc w ANC and ALC
+
+
+######  MODEL
+rownames(meta) <- meta$sample_id
+df <- merge(nasal_genecounts_vst, meta, by="row.names")
+rownames(df) <- df$Row.names
+df <- subset(df, select=-1)
+df <- df[which(!is.na(df$anc)),]
+df$anc_log10 <- log10(df$anc + 0.01)
+vars <- colnames(nasal_genecounts_vst) # if want to try on a smaller gene list: nasal_genecounts_vst[,1:100]
+summary(vars)
+
+model <- geeglm(CXCL8 ~ anc_log10 + age_at_study_years + as.factor(sex), id=as.factor(patient_id), family = gaussian, corstr = "independence", data = df)
+summary(model)
+
+results_df <- map_dfr(vars, function(var) {
+  message("Fitting: ", var); flush.console()
+  fml <- as.formula(sprintf("`%s` ~ anc_log10 + age_at_study_years + as.factor(sex)", var))
+  model <- geeglm(fml, id=as.factor(patient_id), family = gaussian, corstr = "independence", data = df)
+  tidy(model, conf.int = TRUE) %>% mutate(outcome = var) %>% 
+    dplyr::select(outcome, term, estimate, conf.low, conf.high, p.value)
+})
+
+ 
+## NOW APPLY FDR CORRECTION TO JUST THE desired P-VALUES
+results_df_sub <- results_df[which(results_df$term=="anc_log10"),] ## now filter through the results to select genes
+results_df_sub$anc_fdr <- p.adjust(results_df_sub$p.value, method="fdr")
+nrow(results_df_sub[which(results_df_sub$anc_fdr<0.05),]) 
+results_df_merge <- left_join(results_df, results_df_sub)
+head(results_df_merge, n=10)
+
+
+#write.csv(results_df_merge, "geeglm_degs_bal_log10anc_adjagesexhsctday_082625.csv") 
+#write.csv(results_df_merge, "geeglm_degs_bal_log10alc_adjagesexhsctday_082625.csv")  
+
+#write.csv(results_df_merge, "geelgm_degs_nasal_log10anc_adjagesexhsctday_082625.csv")  
+#write.csv(results_df_merge, "geeglm_degs_nasal_log10alc_adjagesexhsctday_082625.csv")  
+
+
+```
+
+
+# .
+# Analysis 3a - microbiome overview
+```{r}
+
+
+## how many taxa > __ mass
+summary(rowSums(nasal_species > 0.0001, na.rm = TRUE)) 
+summary(rowSums(nasal_genus > 0.0001, na.rm = TRUE)) 
+
+summary(rowSums(bal_species > 0.0001, na.rm = TRUE)) 
+summary(rowSums(bal_genus > 0.0001, na.rm = TRUE)) 
+
+summary(nasal_domain$simpson)
+summary(bal_domain$simpson)
+wilcox.test(nasal_domain$simpson, bal_domain$simpson, paired = TRUE)
+
+
+##### MDS PLOT
+bal_genus_filt <- bal_genus[, colSums(bal_genus > 0.0001) >= 0.05*nrow(bal_genus)]
+nasal_genus_filt <- nasal_genus[, colSums(nasal_genus > 0.0001) >= 0.05*nrow(nasal_genus)]
+
+# first get a full sent of all the genera in nasal and BAL samples
+all_genera <- union(colnames(bal_genus_filt), colnames(nasal_genus_filt))
+# then add missing genera as zero columns
+# for bal
+bal <- bal_genus_filt
+missing_in_bal <- setdiff(all_genera, colnames(bal))
+bal[, missing_in_bal] <- 0
+# for nasal
+nasal <- nasal_genus_filt
+missing_in_nasal <- setdiff(all_genera, colnames(nasal))
+nasal[, missing_in_nasal] <- 0
+# reorder the columns and rows to have the same order in both data frames
+bal <- bal[, all_genera]
+nasal <- nasal[, all_genera]
+nasal <- nasal[rownames(bal), ]
+
+rownames(bal) <- paste0(rownames(bal), "_BAL")
+rownames(nasal) <- paste0(rownames(nasal), "_Nasal")
+
+# Create a DGEList containing the count data.
+dge_microbe_np <- DGEList(counts = t(nasal)) # create DGEList for nasal swab data
+dge_microbe_bal <- DGEList(counts = t(bal)) # create DGEList for bal data
+all_counts <- cbind(dge_microbe_np$counts, dge_microbe_bal$counts) # merge the two counts
+dge_microbe <- DGEList(counts = all_counts) # create DGEList with nasal and BAL counts
+sample_type <- c(rep("Nasal", ncol(dge_microbe_np)), rep("BAL", ncol(dge_microbe_bal))) # create a grouping factor based on sample type
+dge_microbe$samples$group <- sample_type # add sample type as the grouping factor
+
+# PlotMDS
+colors_npvbal <- ifelse(dge_microbe$samples$group == "Nasal", "forestgreen", "plum")
+plotMDS(dge_microbe, col=colors_npvbal, pch = 15)
+legend("topright", legend=unique(dge_microbe$samples$group), col = c("forestgreen", "plum"), pch = 15, bty = "n")
+
+
+
+##### plot most abundant taxa according to number of samples detected > minimum
+counts <- colSums(nasal_genus > 0.001, na.rm = TRUE)
+counts <- colSums(nasal_species > 0.001, na.rm = TRUE)
+counts <- colSums(bal_genus > 0.001, na.rm = TRUE)
+counts <- colSums(bal_species > 0.001, na.rm = TRUE)
+
+df_counts <- data.frame(variable = names(counts), count = as.numeric(counts))
+top_counts <- df_counts %>% arrange(desc(count)) %>% slice_head(n = 15)
+top_counts$variable <- factor(top_counts$variable, levels = top_counts$variable[order(-top_counts$count)])
+p4 <- ggplot(top_counts, aes(x = variable, y = count)) + geom_col(fill = "steelblue") +
+  labs(x = "Genus", y = "Number of Samples Detected", title = "Top 25 Microbial Taxa by Frequency of Detection") +
+  theme_minimal() + theme(axis.text.x = element_text(angle = 45, size=12, vjust = 1, hjust = 1))
+plot_grid(p1, p2, p3, p4, ncol=2, align="v")
+
+##### plot most abundant taxa according to highest median values
+bal_genus_sub <- bal_genus[, colSums(bal_genus > 0.001, na.rm = TRUE) >= ceiling(nrow(bal_genus) * 0.15)]
+bal_genus_sub <- subset(bal_genus_sub, select=-Zea)
+bal_genus_log10 <- log10(bal_genus_sub + 0.0001)
+    #variable_order <- sapply(bal_genus_log10, median, na.rm = TRUE)
+    variable_order <- sapply(bal_genus_log10, function(x) {unname(quantile(x, probs = 0.75, na.rm = TRUE))})
+top_vars <- names(sort(variable_order, decreasing = TRUE))[1:10]
+bal_genus_long <- bal_genus_log10 %>% dplyr::select(all_of(top_vars)) %>% pivot_longer(cols = everything(), names_to = "variable", values_to = "value")
+bal_genus_long$variable <- factor(bal_genus_long$variable, levels = names(sort(variable_order[top_vars], decreasing = TRUE)))
+p1 <- ggplot(bal_genus_long, aes(x = variable, y = value)) + geom_violin(trim=TRUE) +  geom_boxplot(outlier.size = 0.5, fill = "#00A3E0", outlier.shape = NA) + geom_jitter(shape=16, position=position_jitter(0.1), size=1) + custom_theme + theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1, size = 12))
+  
+
+nasal_genus_sub <- nasal_genus[, colSums(nasal_genus > 0.001, na.rm = TRUE) >= ceiling(nrow(nasal_genus) * 0.15)]
+nasal_genus_log10 <- log10(nasal_genus_sub + 0.0001)
+variable_order <- sapply(nasal_genus_log10, function(x) {unname(quantile(x, probs = 0.75, na.rm = TRUE))})
+top_vars <- names(sort(variable_order, decreasing = TRUE))[1:10]
+nasal_genus_long <- nasal_genus_log10 %>% dplyr::select(all_of(top_vars)) %>% pivot_longer(cols = everything(), names_to = "variable", values_to = "value")
+nasal_genus_long$variable <- factor(nasal_genus_long$variable, levels = names(sort(variable_order[top_vars], decreasing = TRUE)))
+p2 <- ggplot(nasal_genus_long, aes(x = variable, y = value)) + geom_violin(trim=TRUE) +  geom_boxplot(outlier.size = 0.5, fill = "#D9027D", outlier.shape = NA) + geom_jitter(shape=16, position=position_jitter(0.1), size=1) + custom_theme + theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1, size = 12))
+
+        
+plot_grid(p1, p2, ncol=1, align="v")
+
+```
+#... BMT vs healthy
+``` {r}
+
+
+# merge microbe masses (repeat for nasal & for nasal)
+#colnames(nasal_genus_healthy) <- gsub(" ", ".", colnames(nasal_genus_healthy))
+nasal_genus_combined <- rbind(nasal_genus[, intersect(names(nasal_genus), names(nasal_genus_healthy)), drop = FALSE],
+                     nasal_genus_healthy[, intersect(names(nasal_genus), names(nasal_genus_healthy)), drop = FALSE])
+nasal_genus_combined <- nasal_genus_combined %>%  select(where(~ sum(. > 0.01, na.rm = TRUE) >= 3))
+nasal_genus_combined <- log10(nasal_genus_combined+0.0001)
+
+
+## test for associations
+meta_healthy$patient_id <- rownames(meta_healthy)
+meta_healthy$patient_type <- "Healthy"
+rownames(meta) <- meta$sample_id
+meta$patient_type <- "BMT"
+meta_merge <-  rbind(meta[, intersect(names(meta), names(meta_healthy))],
+                     meta_healthy[, intersect(names(meta), names(meta_healthy))])
+
+df <- merge(nasal_genus_combined, meta_merge, by="row.names")
+rownames(df) <- df$Row.names   
+df <- subset(df, select=-1)
+
+#model <- geeglm(Streptococcus ~ as.factor(patient_type) + age_at_study_years + as.factor(sex), id=as.factor(patient_id), family = gaussian, corstr = "exchangeable", data = df)
+#summary(model)  
+
+p1 <- ggplot(df, aes(x = fct_rev(patient_type), y = Prevotella)) + geom_violin(trim=TRUE) +  geom_boxplot(outlier.size = 0.5, fill = "#D9027D", outlier.shape = NA) + geom_jitter(shape=16, position=position_jitter(0.1), size=1) + custom_theme + labs(title = "Title") 
+p2 <- ggplot(df, aes(x = fct_rev(patient_type), y = Streptococcus)) + geom_violin(trim=TRUE) +  geom_boxplot(outlier.size = 0.5, fill = "#D9027D", outlier.shape = NA) + geom_jitter(shape=16, position=position_jitter(0.1), size=1) + custom_theme + labs(title = "Title") 
+p3 <- ggplot(df, aes(x = fct_rev(patient_type), y = Veillonella)) + geom_violin(trim=TRUE) +  geom_boxplot(outlier.size = 0.5, fill = "#D9027D", outlier.shape = NA) + geom_jitter(shape=16, position=position_jitter(0.1), size=1) + custom_theme + labs(title = "Title") 
+p4 <- ggplot(df, aes(x = fct_rev(patient_type), y = Prevotella)) + geom_violin(trim=TRUE) +  geom_boxplot(outlier.size = 0.5, fill = "#00A3E0", outlier.shape = NA) + geom_jitter(shape=16, position=position_jitter(0.1), size=1) + custom_theme + labs(title = "Title") 
+p5 <- ggplot(df, aes(x = fct_rev(patient_type), y = Streptococcus)) + geom_violin(trim=TRUE) +  geom_boxplot(outlier.size = 0.5, fill = "#00A3E0", outlier.shape = NA) + geom_jitter(shape=16, position=position_jitter(0.1), size=1) + custom_theme + labs(title = "Title") 
+p6 <- ggplot(df, aes(x = fct_rev(patient_type), y = Veillonella)) + geom_violin(trim=TRUE) +  geom_boxplot(outlier.size = 0.5, fill = "#00A3E0", outlier.shape = NA) + geom_jitter(shape=16, position=position_jitter(0.1), size=1) + custom_theme + labs(title = "Title") 
+plot_grid(p1, p2, p3, ncol=3, align="v") #bal strep, veillonella
+plot_grid(p1, p2, p3, p4, p5, p6, ncol=3, align="v") #bal strep, veillonella
+
+## now loop
+varlist <- colnames(nasal_genus_combined) 
+length(varlist)
+
+#### pick model
+results_df <- map_dfr(varlist, function(var) {
+  message("Fitting: ", var); flush.console()
+  fml <- as.formula(sprintf("`%s` ~ as.factor(patient_type) + age_at_study_years + as.factor(sex)", var))
+  model <- geeglm(fml, id=as.factor(patient_id), family = gaussian, corstr = "independence", data = df)
+  tidy(model, conf.int = TRUE) %>% mutate(outcome = var) %>% 
+    dplyr::select(outcome, term, estimate, conf.low, conf.high, p.value)
+})
+
+## NOW APPLY FDR CORRECTION TO JUST THE desired P-VALUES
+results_df_sub <- results_df[which(results_df$term=="as.factor(patient_type)Healthy"),]
+results_df_sub$fdr <- p.adjust(results_df_sub$p.value, method="fdr")
+nrow(results_df_sub[which(results_df_sub$fdr<0.05),]) 
+results_df_merge <- left_join(results_df, results_df_sub)
+head(results_df_merge, n=10)
+
+write.csv(results_df_merge, "geeglm_genus_bmtvshealthy_nasalonly_adjagesexpatient_032226.csv")
+
+```
+# Analysis 3b - microbiome overlap
+#... BMT
+``` {r}
+
+          
+   
+# first get a full sent of all the genera in nasal and BAL samples
+all_genera <- union(colnames(bal_genus), colnames(nasal_genus))
+
+# then add missing genera as zero columns
+bal <- bal_genus
+missing_in_bal <- setdiff(all_genera, colnames(bal))
+bal[, missing_in_bal] <- 0
+nasal <- nasal_genus
+missing_in_nasal <- setdiff(all_genera, colnames(nasal))
+nasal[, missing_in_nasal] <- 0
+
+# reorder the columns and rows to have the same order in both data frames
+bal <- bal[, all_genera]
+nasal <- nasal[, all_genera]
+nasal <- nasal[rownames(bal), ]
+
+df3 <- map2_df(bal, nasal, ~ case_when(
+  .x >= 0.0001 & .y >= 0.0001 ~ "both",
+  .x >= 0.0001 & .y < 0.0001 ~ "BAL",
+  .x < 0.0001 & .y >= 0.0001 ~ "nasal",
+  .x < 0.0001 & .y < 0.0001 ~ "none"
+))
+
+
+rownames(df3) <- rownames(bal_genus)
+
+levels4 <- c("both", "BAL", "nasal", "none")
+
+counts_mat <- t(vapply(df3, function(x) {
+  x <- factor(as.character(x), levels = levels4)  # normalize
+  as.integer(table(x))                            # counts in the fixed order
+}, integer(length(levels4))))
+
+colnames(counts_mat) <- levels4
+counts <- data.frame(variable = rownames(counts_mat), counts_mat, row.names = NULL)
+rownames(counts) <- counts$variable
+counts <- subset(counts, select=-1)
+counts$taxa <- rownames(counts)
+
+#taxonomy <- read.csv("taxonomy_081822.csv", header=TRUE, row.names= NULL, check.names=FALSE)
+taxonomy_euk <- taxonomy[which(taxonomy$domain=="Eukaryota"),]
+taxonomy_euk <- taxonomy[which(taxonomy$kingdom=="Fungi"),]
+#taxonomy_euk <- taxonomy[which(taxonomy$phylum=="Ascomycota"),]
+counts_euk <-  counts[rownames(counts) %in% taxonomy_euk$genus,]
+
+
+#write.csv(counts, "genucounts#write.csv(counts, "genus_overlap_counts_082025.csv")
+#write.csv(counts, "species_overlap_counts_082025.csv")
+
+### PLOT STACKED BAR for most common in both/BAL/nose
+cats_prefer <- c("both","BAL","nasal","neither")
+counts <- counts[rownames(counts) != "Anelloviridae",]
+counts <- counts[rownames(counts) != "Malassezia",]
+counts <- counts[rownames(counts) != "Delftia",]
+df_top10 <- counts %>%
+  tibble::rownames_to_column("species") %>%
+  dplyr::select(species, dplyr::any_of(c("both","BAL","nasal","neither","none"))) %>% # keep the four category columns (accept "none" and map it to "neither")
+  dplyr::rename(neither = dplyr::any_of("none")) %>%
+  {for (cn in setdiff(cats_prefer, names(.))) .[[cn]] <- 0; .} %>% # ensure all four exist and are numeric
+  dplyr::mutate(dplyr::across(all_of(cats_prefer), ~as.numeric(.))) %>%
+  dplyr::arrange(neither) %>% # pick top 10 by desired category --  dplyr::arrange(both)
+  dplyr::slice_head(n = 15) %>%
+  dplyr::mutate(species = forcats::fct_reorder(species, neither, .desc = TRUE)) %>% # order bars by nasal descending
+  tidyr::pivot_longer(all_of(cats_prefer), names_to = "category", values_to = "n")
+
+# 100% stacked barplot
+df_top10$category <- factor(df_top10$category, levels = c("neither", "nasal", "both", "BAL")) 
+ggplot(df_top10, aes(x = species, y = n, fill = category)) +
+  geom_col(position = "fill") + scale_fill_manual(values = c("grey", "#D9027D", "purple", "#00A3E0")) +
+  coord_flip() +  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+  labs(title = "Top 10 species by 'nasal' count (100% stacked)",
+    x = NULL, y = "Percent", fill = NULL) +
+  theme_minimal()
+
+######## eukaryotes
+
+df3 <- map2_df(bal, nasal, ~ case_when(
+  .x >= 0.001 & .y >= 0.0001 ~ "both",
+  .x >= 0.001 & .y < 0.0001 ~ "BAL",
+  .x < 0.001 & .y >= 0.0001 ~ "nasal",
+  .x < 0.001 & .y < 0.0001 ~ "none"
+))
+
+rownames(df3) <- rownames(bal_genus)
+
+levels4 <- c("both", "BAL", "nasal", "none")
+
+counts_mat <- t(vapply(df3, function(x) {
+  x <- factor(as.character(x), levels = levels4)  # normalize
+  as.integer(table(x))                            # counts in the fixed order
+}, integer(length(levels4))))
+
+colnames(counts_mat) <- levels4
+counts <- data.frame(variable = rownames(counts_mat), counts_mat, row.names = NULL)
+rownames(counts) <- counts$variable
+counts <- subset(counts, select=-1)
+counts$taxa <- rownames(counts)
+
+#taxonomy <- read.csv("taxonomy_081822.csv", header=TRUE, row.names= NULL, check.names=FALSE)
+taxonomy_euk <- taxonomy[which(taxonomy$domain=="Eukaryota"),]
+taxonomy_euk <- taxonomy[which(taxonomy$kingdom=="Fungi"),]
+#taxonomy_euk <- taxonomy[which(taxonomy$phylum=="Ascomycota"),]
+counts_euk <-  counts[rownames(counts) %in% taxonomy_euk$genus,]
+
+cats_prefer <- c("both","BAL","nasal","neither")
+df_top10 <- counts_euk %>%
+  tibble::rownames_to_column("species") %>%
+  dplyr::select(species, dplyr::any_of(c("both","BAL","nasal","neither","none"))) %>% # keep the four category columns (accept "none" and map it to "neither")
+  dplyr::rename(neither = dplyr::any_of("none")) %>%
+  {for (cn in setdiff(cats_prefer, names(.))) .[[cn]] <- 0; .} %>% # ensure all four exist and are numeric
+  dplyr::mutate(dplyr::across(all_of(cats_prefer), ~as.numeric(.))) %>%
+  dplyr::arrange(desc(both)) %>% # pick top 10 by desired category --  dplyr::arrange(both)
+  dplyr::slice_head(n = 7) %>%
+  dplyr::mutate(species = forcats::fct_reorder(species, neither, .desc = TRUE)) %>% # order bars by nasal descending
+  tidyr::pivot_longer(all_of(cats_prefer), names_to = "category", values_to = "n")
+
+# 100% stacked barplot
+df_top10$category <- factor(df_top10$category, levels = c("neither", "nasal", "both", "BAL")) 
+df_top10 <- df_top10[which(df_top10$category!="neither"),]
+ggplot(df_top10, aes(x = species, y = n, fill = category)) + geom_bar(stat="identity") + coord_flip() + scale_fill_manual(values = c("#D9027D", "purple", "#00A3E0")) 
+
+################ viruses
+respiratory_viruses <- c(
+  "Alphacoronavirus", # human coronaviruses NL63, 229E
+  "Betacoronavirus", # SARS-CoV, MERS-CoV, SARS-CoV-2, OC43, HKU1
+  "Betainfluenzavirus", # Influenza B virus
+  "Enterovirus", # rhinoviruses, EV-D68
+  "Gammainfluenzavirus", # Influenza C virus
+  "Metapneumovirus", # Human metapneumovirus
+  "Orthopneumovirus", # Respiratory Syncytial Virus
+  "Orthorubulavirus", # Parainfluenza viruses
+  "Respirovirus", # Parainfluenza virus types 1 & 3
+  "Rubivirus",       # rubella is spread via respiratory route, but mild respiratory symptoms
+  "Roseolovirus",    # roseola, spread via respiratory droplets
+  "Simplexvirus",    # HSV can transmit via saliva, though not classic resp virus
+  "Alphainfluenzavirus",  # Influenza A
+  "Mastadenovirus"        # Human Adenovirus
+)
+
+counts_allviruses <- counts[grepl("virus|virid", rownames(counts), ignore.case = TRUE), ]
+counts_sub <-  counts[rownames(counts) %in% c(respiratory_viruses),]
+#write.csv(counts_allviruses, "counts_allviruses.csv")
+
+### PLOT STACKED BAR for least common in neither (aka most common anywhere)
+cats_prefer <- c("both","BAL","nasal","neither")
+
+df_top10 <- counts_sub %>%
+  tibble::rownames_to_column("species") %>%
+  dplyr::select(species, dplyr::any_of(c("both","BAL","nasal","neither","none"))) %>% # keep the four category columns (accept "none" and map it to "neither")
+  dplyr::rename(neither = dplyr::any_of("none")) %>%
+  {for (cn in setdiff(cats_prefer, names(.))) .[[cn]] <- 0; .} %>% # ensure all four exist and are numeric
+  dplyr::mutate(dplyr::across(all_of(cats_prefer), ~as.numeric(.))) %>%
+  dplyr::arrange(neither) %>% # pick top 10 by desired category --  dplyr::arrange(both)
+  dplyr::slice_head(n = 100) %>%
+  dplyr::mutate(species = forcats::fct_reorder(species, neither, .desc = TRUE)) %>% # order bars by nasal descending
+  tidyr::pivot_longer(all_of(cats_prefer), names_to = "category", values_to = "n")
+
+# 100% stacked barplot
+df_top10$category <- factor(df_top10$category, levels = c("neither", "nasal", "both", "BAL"))
+df_top10 <- df_top10[which(df_top10$category!="neither"),]
+
+ggplot(df_top10, aes(x = species, y = n, fill = category)) +
+  geom_col(position = "fill") +
+  coord_flip() + scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+  labs(title = "Top 10 species by 'BAL' count (100% stacked)",
+    x = NULL, y = "Percent", fill = NULL) +
+  theme_minimal()
+
+ggplot(df_top10, aes(x = species, y = n, fill = category)) + geom_bar(stat="identity") + coord_flip() + scale_fill_manual(values = c("#D9027D", "purple", "#00A3E0")) 
+
+
+#### DESCRIBE UPPER-LOWER CORRELATION FOR AGGREGATE MICROBIOME TRAITS
+
+cor.test(nasal_domain$richness, bal_domain$richness, method="spearman")
+cor.test(nasal_domain$simpson, bal_domain$simpson, method="spearman")
+cor.test(nasal_domain$shannon, bal_domain$shannon, method="spearman")
+
+cor.test(nasal_domain$Bacteria, bal_domain$Bacteria, method="spearman")
+cor.test(nasal_domain$Eukaryota, bal_domain$Eukaryota, method="spearman")
+cor.test(nasal_domain$Viruses, bal_domain$Viruses, method="spearman")
+
+```
+#... Healthy
+```{r}
+
+
+
+# first get a full sent of all the genera in nasal and BAL samples
+all_genera <- union(colnames(bal_genus_healthy), colnames(nasal_genus_healthy))
+
+# then add missing genera as zero columns
+bal <- bal_genus_healthy
+missing_in_bal <- setdiff(all_genera, colnames(bal))
+bal[, missing_in_bal] <- 0
+nasal <- nasal_genus_healthy
+missing_in_nasal <- setdiff(all_genera, colnames(nasal))
+nasal[, missing_in_nasal] <- 0
+
+# reorder the columns and rows to have the same order in both data frames
+bal <- bal[, all_genera]
+nasal <- nasal[, all_genera]
+nasal <- nasal[rownames(bal), ]
+
+df3 <- map2_df(bal, nasal, ~ case_when(
+  .x >= 0.001 & .y >= 0.001 ~ "both",
+  .x >= 0.001 & .y < 0.001 ~ "BAL",
+  .x < 0.001 & .y >= 0.001 ~ "nasal",
+  .x < 0.001 & .y < 0.001 ~ "none"
+))
+
+
+rownames(df3) <- rownames(healthy_genusmass_BAL)
+
+levels4 <- c("both", "BAL", "nasal", "none")
+
+counts_mat <- t(vapply(df3, function(x) {
+  x <- factor(as.character(x), levels = levels4)  # normalize
+  as.integer(table(x))                            # counts in the fixed order
+}, integer(length(levels4))))
+
+colnames(counts_mat) <- levels4
+counts <- data.frame(variable = rownames(counts_mat), counts_mat, row.names = NULL)
+rownames(counts) <- counts$variable
+counts <- subset(counts, select=-1)
+counts$taxa <- rownames(counts)
+
+
+
+### PLOT STACKED BAR for least common in neither (aka most common anywhere)
+cats_prefer <- c("both","BAL","nasal","neither")
+
+counts <- counts[which(counts$taxa!="Pseudomonas"),]
+counts <- counts[which(counts$taxa!="Pinus"),]
+counts <- counts[which(counts$taxa!="Komagataella"),]
+counts <- counts[which(counts$taxa!="Stutzerimonas"),]
+counts <- counts[which(counts$taxa!="Pantoea"),]
+
+df_top10 <- counts %>%
+  tibble::rownames_to_column("species") %>%
+  dplyr::select(species, dplyr::any_of(c("both","BAL","nasal","neither","none"))) %>% # keep the four category columns (accept "none" and map it to "neither")
+  dplyr::rename(neither = dplyr::any_of("none")) %>%
+  {for (cn in setdiff(cats_prefer, names(.))) .[[cn]] <- 0; .} %>% # ensure all four exist and are numeric
+  dplyr::mutate(dplyr::across(all_of(cats_prefer), ~as.numeric(.))) %>%
+  dplyr::arrange(neither) %>% # pick top 10 by desired category --  dplyr::arrange(both)
+  dplyr::slice_head(n = 20) %>%
+  dplyr::mutate(species = forcats::fct_reorder(species, neither, .desc = TRUE)) %>% # order bars by nasal descending
+  tidyr::pivot_longer(all_of(cats_prefer), names_to = "category", values_to = "n")
+
+# 100% stacked barplot
+df_top10$category <- factor(df_top10$category, levels = c("neither", "nasal", "both", "BAL"))
+df_top10 <- df_top10[which(df_top10$category!="neither"),]
+
+ggplot(df_top10, aes(x = species, y = n, fill = category)) +
+  geom_col(position = "fill") +
+  coord_flip() + scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+  labs(title = "Top 10 species by 'BAL' count (100% stacked)",
+    x = NULL, y = "Percent", fill = NULL) +
+  theme_minimal()
+
+ggplot(df_top10, aes(x = species, y = n, fill = category)) + geom_bar(stat="identity") + coord_flip() + scale_fill_manual(values = c("#D9027D", "purple", "#00A3E0")) 
+
+```
+# Analysis 3c - antibiotic associations
+```{r}
+
+## desribe AES
+hist(abx_score$antibact_score_sum)
+sum(abx_score$antibact_score_sum>0)
+summary(abx_score$antibact_score_sum)
+
+
+
+######  MODEL
+nasal_genus_sub <- nasal_genus[, colSums(nasal_genus > 0.0001) >= 0.15*nrow(nasal_genus)]
+df <- merge(log10(nasal_genus_sub+0.0001), abx_score, by="row.names")
+rownames(df) <- df$Row.names
+df <- subset(df, select=-1)
+df <- merge(df, meta, by="row.names")
+vars <- colnames(nasal_genus_sub)
+length(vars)
+
+results_df <- map_dfr(vars, function(var) {
+        message("Fitting: ", var); flush.console()
+        formula <- as.formula(paste("antibact_score_sum ~", var, "+ age_at_study_years + as.factor(sex)")) # Fit the GEE model
+        model <- geeglm(formula, id=as.factor(patient_id), family = gaussian, corstr = "independence", data = df)
+        tidy(model, conf.int = TRUE) %>% mutate(outcome = var) %>% dplyr::select(outcome, term, estimate, conf.low, conf.high, p.value) # Get tidy summary
+      })
+
+## NOW APPLY FDR CORRECTION TO JUST THE desired P-VALUES
+results_df_sub <- results_df[results_df$term %in% vars, ]
+results_df_sub$fdr <- p.adjust(results_df_sub$p.value, method="fdr")
+results_df_merge <- left_join(results_df, results_df_sub)
+head(results_df_merge, n=10)
+
+#write.csv(results_df_merge, "geeglm_aesvsnasalgenus_adjagesexpatient_082225.csv")
+#write.csv(results_df_merge, "geeglm_aesvsnasalspecies_adjagesexpatient_082225.csv")
+
+#write.csv(results_df_merge, "geeglm_aesvsbalgenus_adjagesexpatient_082225.csv")
+#write.csv(results_df_merge, "geeglm_aesvsbalspecies_adjagesexpatient_082225.csv")
+
+### plot example (scatterplot)
+ggplot(df, aes(x = Veillonella, y = antibact_score_sum)) +  geom_point( ) + labs(x = "Microbe", y = "AES", title = "AES-Microbiome Relationship") +  theme_minimal( )
+
+
+### plot example (box whisker)
+df <- df %>% mutate(Veillonella_Nasal_tert = ntile(Veillonella, 3))  # 1..4 quartiles
+#df <- df %>% mutate(var2_band = case_when(Streptococcus ==-4 ~ "None", Streptococcus>-4 & Streptococcus <=-3 ~ "Low", Streptococcus >-3 ~ "High"))
+table(df$var2_q)
+#df$var2_band <- factor(df$var2_band, levels = c("None", "Low", "High"))
+p4 <- ggplot(df, aes(x=factor(Veillonella_Nasal_tert), y=antibact_score_sum)) + geom_violin(trim=TRUE) + geom_boxplot(width=0.3, color="blue", outlier.shape=NA) + geom_jitter(shape=16, position=position_jitter(0.1))
+p4
+#ggplot(df, aes(x = antibact_score_sum, y = as.factor(var2_q), fill = as.factor(var2_q))) + geom_density_ridges() + theme_minimal() #+ scale_x_continuous(trans='log10', oob = scales::squish_infinite) 
+
+
+plot_grid(p1, p2, p3, p4, ncol=2, align="v") #bal strep, veillonella
+
+```
+
+#Analysis 3d - AES vs upper/lower concordance
+```{r}
+
+##
+bal_genus_sub <- bal_genus[, colSums(bal_genus > 0.01) >= 0.15*nrow(bal_genus)]
+nasal_genus_sub <- nasal_genus[, colSums(nasal_genus > 0.01) >= 0.15*nrow(nasal_genus)]
+bal_genus_sub <- bal_genus
+nasal_genus_sub <- nasal_genus
+
+# first get a full sent of all the genera in nasal and BAL samples
+all_genera <- union(colnames(bal_genus_sub), colnames(nasal_genus_sub))
+# then add missing genera as zero columns
+# for bal
+bal <- bal_genus_sub
+missing_in_bal <- setdiff(all_genera, colnames(bal))
+bal[, missing_in_bal] <- 0
+# for nasal
+nasal <- nasal_genus_sub
+missing_in_nasal <- setdiff(all_genera, colnames(nasal))
+nasal[, missing_in_nasal] <- 0
+# reorder the columns and rows to have the same order in both data frames
+bal <- bal[, all_genera]
+nasal <- nasal[, all_genera]
+nasal <- nasal[rownames(bal), ]
+
+
+df3 <- map2_df(bal, nasal, ~ case_when(
+  .x >= 0.0001 & .y >= 0.0001 ~ "both",
+  .x >= 0.0001 & .y < 0.0001 ~ "one",
+  .x < 0.0001 & .y >= 0.0001 ~ "one",
+  .x < 0.0001 & .y < 0.0001 ~ "none"
+))
+
+df3 <- df3[ , sort(colnames(df3))]
+levels_vec <- c("none", "one", "both")  # your desired order
+df3 <- df3 %>% mutate(across(where(is.character) | where(is.factor), ~ factor(trimws(.x), levels = levels_vec))) 
+df3 <- df3 %>% mutate(across(where(is.factor), as.integer))  #1 = none, 2 = one, 3 = both
+rownames(df3) <- rownames(bal)
+
+
+#### INFLUENCE OF AES ON UPPER-LOWER CONCORDANCE
+df3$sample_id <- rownames(df3)
+abx_score$sample_id <- rownames(abx_score)
+df4 <- merge(df3, abx_score, by="sample_id")
+df5 <- merge(df4, meta, by="sample_id")
+
+
+
+## see & describe the data for example taxa
+table(df5$Streptococcus.pneumoniae)
+tapply(df5$antibact_score_sum, df5$Streptococcus.pneumoniae, summary)
+wilcox.test(df5$antibact_score_sum, as.numeric(as.factor(df5$Streptococcus.pneumoniae)))
+
+table(df5$Streptococcus)
+p5 <- ggplot(df5, aes(x=factor(Streptococcus), y=antibact_score_sum)) + geom_violin(trim=TRUE) + geom_boxplot(width=0.3, color="blue", outlier.shape=NA) + geom_jitter(shape=16, position=position_jitter(0.1)) + theme(legend.position="none", axis.title.x = element_blank())
+
+table(df5$Veillonella)
+p6 <- ggplot(df5, aes(x=factor(Veillonella), y=antibact_score_sum)) + geom_violin(trim=TRUE) + geom_boxplot(width=0.3, color="blue", outlier.shape=NA) + geom_jitter(shape=16, position=position_jitter(0.1)) + theme(legend.position="none", axis.title.x = element_blank())
+
+plot_grid(p1, p2, ncol=2, align="v")
+
+plot_grid(p1, p3, p5, p2, p4, p6, ncol=3, align="v")
+       
+df6 <- df5[which(df5$antibact_score_sum==0),]
+table(df6$Corynebacterium)
+table(df6$Staphylococcus)
+
+table(df6$Prevotella)
+table(df6$Streptococcus)
+table(df6$Veillonella)
+
+## test for differences
+model <- geeglm(antibact_score_sum ~ as.factor(Streptococcus.pneumoniae) + age_at_study_years + as.factor(sex), id=as.factor(patient_id), family = gaussian, corstr = "independence", data = df5)
+summary(model)        
+anova(model)
+
+model <- geeglm(antibact_score_sum ~ Streptococcus.pneumoniae + age_at_study_years + as.factor(sex), id=as.factor(patient_id), family = gaussian, corstr = "independence", data = df5)
+summary(model)        
+
+
+## now loop models for all vars
+df3 <- subset(df3, select=-sample_id)
+varlist <- colnames(df3) # List of outcome variables
+results_df <- map_dfr(varlist, function(var) {
+  message("Fitting: ", var); flush.console()
+  fml <- as.formula(sprintf("antibact_score_sum ~ `%s` + age_at_study_years + as.factor(sex)", var))
+  model <- geeglm(fml, id=as.factor(patient_id), family = gaussian, corstr = "independence", data = df5)
+  tidy(model, conf.int = TRUE) %>% mutate(outcome = var) %>% 
+    dplyr::select(outcome, term, estimate, conf.low, conf.high, p.value)
+})
+
+
+## NOW APPLY FDR CORRECTION TO JUST THE desired P-VALUES
+results_df_sub <- results_df[results_df$term %in% varlist, ]
+results_df_sub$fdr <- p.adjust(results_df_sub$p.value, method="fdr")
+results_df_merge <- left_join(results_df, results_df_sub)
+head(results_df_merge, n=10)
+
+#write.csv(results_df_merge, "geeglm_aesvsconcordance123_genus_adjagesexpatient_082225.csv")
+#write.csv(results_df_merge, "geeglm_aesvsconcordance123_species_adjagesexpatient_082225.csv")
+
+
+## PLOT EXAMPLE
+ggplot(df5, aes(x=factor(Streptococcus), y=antibact_score_sum, color=as.factor(Streptococcus))) + geom_violin(trim=TRUE) + geom_boxplot(width=0.3, color="blue", outlier.shape=NA) + geom_jitter(shape=16, position=position_jitter(0.1)) + theme(legend.position="none", axis.title.x = element_blank())
+
+
+```
+
+#.
+# Analysis 4a - bacteria-gxp correlations
+#... BMT
+```{r}
+
+
+#### TEST FOR ASSOCIATIONS IN BAL & THEN SEPARATELY IN NASAL, COMPARE LISTS
+bal_domain_temp <- log10(bal_domain+0.0001)
+rownames(bal_domain_temp) <- paste0(rownames(bal_domain_temp), "_BAL")
+nasal_domain_temp <- log10(nasal_domain+0.0001)
+rownames(nasal_domain_temp) <- paste0(rownames(nasal_domain_temp), "_Nasal")
+domain_merge <- rbind(bal_domain_temp, nasal_domain_temp)
+
+rownames(meta) <- meta$sample_id
+bal_meta_temp <- meta
+bal_meta_temp$site <- "BAL"
+rownames(bal_meta_temp) <- paste0(rownames(bal_meta_temp), "_BAL")
+nasal_meta_temp <- meta
+nasal_meta_temp$site <- "Nasal"
+rownames(nasal_meta_temp) <- paste0(rownames(nasal_meta_temp), "_Nasal")
+meta_merge <- rbind(bal_meta_temp, nasal_meta_temp)
+
+df <- merge(genecounts_vst_merge, domain_merge, by="row.names")
+rownames(df) <- df$Row.names   
+df <- subset(df, select=-1)
+df <- merge(df, meta_merge, by="row.names")
+df <- subset(df, select=-1)
+
+
+## test for association
+df_sub <- df[which(df$site=="BAL"),]
+model <- geeglm(CSF3R ~ Bacteria + age_at_study_years + as.factor(sex), id=as.factor(patient_id), family = gaussian, corstr = "independence", data = df_sub)
+summary(model)        
+
+df_sub <- df[which(df$site=="Nasal"),]
+model <- geeglm(CSF3R ~ Bacteria + age_at_study_years + as.factor(sex), id=as.factor(patient_id), family = gaussian, corstr = "independence", data = df_sub)
+summary(model)        
+
+
+
+### NOW LOOP
+df_sub <- df[which(df$site=="BAL"),]
+df_sub <- df[which(df$site=="Nasal"),]
+
+
+bal_genecounts_vst_filter <- filterGenes(t(bal_genecounts_vst), filterTypes = c("central", "dispersion"), filterCentralType = "median", filterCentralPercentile = 0.2, filterDispersionType = "cv", filterDispersionPercentile = 0.2, sequential = TRUE)
+
+nasal_genecounts_vst_filter <- filterGenes(t(nasal_genecounts_vst), filterTypes = c("central", "dispersion"), filterCentralType = "median", filterCentralPercentile = 0.2, filterDispersionType = "cv", filterDispersionPercentile = 0.2, sequential = TRUE)
+
+varlist <- rownames(nasal_genecounts_vst_filter) # List of variables using gene counts IN COMMON in both BAL & nasal
+
+results_df <- map_dfr(varlist, function(var) {
+  message("Fitting: ", var); flush.console()
+  fml <- as.formula(sprintf("`%s` ~ Bacteria + age_at_study_years + as.factor(sex)", var))
+  model <- geeglm(fml, id=as.factor(patient_id), family = gaussian, corstr = "independence", data = df_sub)
+  tidy(model, conf.int = TRUE) %>% mutate(outcome = var) %>% 
+    dplyr::select(outcome, term, estimate, conf.low, conf.high, p.value)
+})
+
+## NOW APPLY FDR CORRECTION TO JUST THE desired P-VALUES
+results_df_sub <- results_df[which(results_df$term=="Bacteria"),]
+results_df_sub$fdr <- p.adjust(results_df_sub$p.value, method="fdr")
+nrow(results_df_sub[which(results_df_sub$fdr<0.05),]) 
+results_df_merge <- left_join(results_df, results_df_sub)
+head(results_df_merge, n=10)
+
+#write.csv(results_df_merge, "geeglm_gxpvsbact_BALonly_varfilt02_adjagesexpatient_082625.csv")
+#write.csv(results_df_merge, "geeglm_gxpvsbact_nasalonly_varfilt02_adjagesexpatient_082625.csv")
+
+
+##### fig 4a -- combined volcano plot
+df_gxp_vs_bacteria_bal <- read.csv("geeglm_gxpvsbact_balonly_varfilt02_adjagesexpatient_082625.csv", header=TRUE, row.names=1, check.names=FALSE)
+df_gxp_vs_bacteria_bal <- df_gxp_vs_bacteria_bal[which(df_gxp_vs_bacteria_bal$term=="Bacteria"),]
+df_gxp_vs_bacteria_nasal <- read.csv("geeglm_gxpvsbact_nasalonly_varfilt02_adjagesexpatient_082625.csv", header=TRUE, row.names=1, check.names=FALSE)
+df_gxp_vs_bacteria_nasal <- df_gxp_vs_bacteria_nasal[which(df_gxp_vs_bacteria_nasal$term=="Bacteria"),]
+
+
+df_gxp_vs_bacteria_bal$outcome <- paste0(df_gxp_vs_bacteria_bal$outcome, "_BAL")
+df_gxp_vs_bacteria_bal$site <- "BAL"
+df_gxp_vs_bacteria_bal <- subset(df_gxp_vs_bacteria_bal, select=-fdr_new)
+df_gxp_vs_bacteria_nasal$outcome <- paste0(df_gxp_vs_bacteria_nasal$outcome, "_Nasal")
+df_gxp_vs_bacteria_nasal$site <- "Nasal"
+df <- rbind(df_gxp_vs_bacteria_bal, df_gxp_vs_bacteria_nasal)
+
+df <- df %>%  mutate(new_colors = case_when(
+      site == "BAL" & fdr<0.05 & abs(estimate)>0.05 ~ "BAL_sig",
+      site == "Nasal" & fdr<0.05 & abs(estimate)>0.05 ~ "Nasal_sig",
+      TRUE ~ "Other"  # default
+    ))
+colors <- c("BAL_sig" = "#00A3E0", "Nasal_sig" = "#D9027D", "Other" = "grey")
+keyvals <- colors[df$new_colors]
+names(keyvals) <- df$new_colors 
+
+EnhancedVolcano(df, x = 'estimate', y = 'fdr',lab = rep("", nrow(df)), colCustom = keyvals, xlim=c(-0.85,0.85), ylim=c(0,12), #lab=df$outcome,
+    pCutoff = 0.05, FCcutoff = 0.05,  title = NULL, subtitle = NULL, caption = NULL, )
+
+
+#### Analyze results
+df_gxp_vs_bacteria_bal <- read.csv("geeglm_gxpvsbact_balonly_varfilt02_adjagesexpatient_082625.csv", header=TRUE, row.names=1, check.names=FALSE)
+df_gxp_vs_bacteria_bal <- df_gxp_vs_bacteria_bal[which(df_gxp_vs_bacteria_bal$term=="Bacteria"),]
+df_gxp_vs_bacteria_bal <- df_gxp_vs_bacteria_bal[which(df_gxp_vs_bacteria_bal$fdr<0.05),]
+nrow(df_gxp_vs_bacteria_bal)
+df_gxp_vs_bacteria_nasal <- read.csv("geeglm_gxpvsbact_nasalonly_varfilt02_adjagesexpatient_082625.csv", header=TRUE, row.names=1, check.names=FALSE)
+df_gxp_vs_bacteria_nasal <- df_gxp_vs_bacteria_nasal[which(df_gxp_vs_bacteria_nasal$term=="Bacteria"),]
+df_gxp_vs_bacteria_nasal <- df_gxp_vs_bacteria_nasal[which(df_gxp_vs_bacteria_nasal$fdr<0.05),]
+nrow(df_gxp_vs_bacteria_nasal)
+
+## overlap
+df_gxp_vs_bacteria_bal <- df_gxp_vs_bacteria_bal[which(df_gxp_vs_bacteria_bal$estimate>0),]
+df_gxp_vs_bacteria_nasal <- df_gxp_vs_bacteria_nasal[which(df_gxp_vs_bacteria_nasal$estimate>0),]
+
+bal_nasal_up <- inner_join(df_gxp_vs_bacteria_bal, df_gxp_vs_bacteria_nasal, by = c("outcome" = "outcome"))
+nrow(bal_nasal_up)
+
+enrich_out <- enricher(gene = bal_nasal_up$outcome, TERM2GENE = m_t2g, pvalueCutoff = 0.05, minGSSize=10, maxGSSize=500) #qvalueCutoff=0.15
+head(enrich_out)
+df_enrich_out <- as.data.frame(enrich_out)
+write.csv(df_enrich_out, "geeglm_gxpvsbact_balandnasal_UP_enrichr_090325.csv")
+
+## up in only one site
+df_gxp_vs_bacteria_bal <- df_gxp_vs_bacteria_bal[which(df_gxp_vs_bacteria_bal$estimate>0),]
+df_gxp_vs_bacteria_nasal <- df_gxp_vs_bacteria_nasal[which(df_gxp_vs_bacteria_nasal$estimate>0),]
+
+bal_up_only <- df_gxp_vs_bacteria_bal[!df_gxp_vs_bacteria_bal$outcome %in% df_gxp_vs_bacteria_nasal$outcome, ]
+nrow(bal_up_only)
+nasal_up_only <- df_gxp_vs_bacteria_nasal[!df_gxp_vs_bacteria_nasal$outcome %in% df_gxp_vs_bacteria_bal$outcome, ]
+nrow(nasal_up_only)
+
+enrich_out <- enricher(gene = bal_up_only$outcome, TERM2GENE = m_t2g, pvalueCutoff = 0.05, minGSSize=10, maxGSSize=500) #qvalueCutoff=0.15
+head(enrich_out)
+df_enrich_out <- as.data.frame(enrich_out)
+#write.csv(df_enrich_out, "enrich_gxp_vs_bacteria_bal_up_only_090325.csv")
+#write.csv(df_enrich_out, "enrich_gxp_vs_bacteria_nasal_up_only_090325.csv")                               
+
+## down in only one site
+df_gxp_vs_bacteria_bal <- df_gxp_vs_bacteria_bal[which(df_gxp_vs_bacteria_bal$estimate<0),]
+df_gxp_vs_bacteria_nasal <- df_gxp_vs_bacteria_nasal[which(df_gxp_vs_bacteria_nasal$estimate<0),]
+
+bal_down_only <- df_gxp_vs_bacteria_bal[!df_gxp_vs_bacteria_bal$outcome %in% df_gxp_vs_bacteria_nasal$outcome, ]
+nrow(bal_down_only)
+nasal_down_only <- df_gxp_vs_bacteria_nasal[!df_gxp_vs_bacteria_nasal$outcome %in% df_gxp_vs_bacteria_bal$outcome, ]
+nrow(nasal_down_only)
+
+enrich_out <- enricher(gene = nasal_down_only$outcome, TERM2GENE = m_t2g, pvalueCutoff = 0.05, minGSSize=10, maxGSSize=500) #qvalueCutoff=0.15
+head(enrich_out)
+df_enrich_out <- as.data.frame(enrich_out)
+#write.csv(df_enrich_out, "enrich_gxp_vs_bacteria_bal_down_only_090325.csv")
+#write.csv(df_enrich_out, "enrich_gxp_vs_bacteria_nasal_down_only_090325.csv")  
+
+##### GSEA
+df_gxp_vs_bacteria <- read.csv("geeglm_gxpvsbact_BALonly_adjagesexpatient_082625.csv", header=TRUE, row.names=1, check.names=FALSE)
+#df_gxp_vs_bacteria <- read.csv("geeglm_gxpvsbact_nasalonly_adjagesexpatient_082625.csv", header=TRUE, row.names=1, check.names=FALSE)
+df_gxp_vs_bacteria_sub <- df_gxp_vs_bacteria[which(df_gxp_vs_bacteria$fdr<0.05),]
+
+degs <- df_gxp_vs_bacteria_sub$outcome
+geneList <- df_gxp_vs_bacteria_sub$estimate # put LogFC here from edgeR output (tops_filt)
+names(geneList) <- as.character(degs) # put gene SYMBOL here
+geneList = sort(geneList, decreasing = TRUE)
+
+gse_msigdb <- GSEA(geneList, TERM2GENE = m_t2g, minGSSize = 10, maxGSSize = 300, pvalueCutoff = 0.05, pAdjustMethod = "BH",  by = "fgsea") 
+
+head(gse_msigdb, 40)
+gse_msigdb_df <- as.data.frame(gse_msigdb)
+gse_msigdb_df <- gse_msigdb_df[ which(gse_msigdb_df$p.adjust<=0.05), ]
+
+
+### FIG 4B -- PLOT
+
+## show example GENE?
+df %>%  mutate(site = factor(site)) %>%
+  ggplot(aes(x = CSF3R, y = Bacteria)) +
+  geom_point(alpha = 0.7) +  geom_smooth(method = "lm", se = FALSE) +   # optional trend line
+  facet_wrap(~ site, nrow = 1) +  # two separate panels
+  theme_bw() + theme(panel.grid = element_blank()) +  labs(title = "GXP vs. Bacteria by Site", x = "FTL", y = "Bacteria")
+# FTL, CXCL8, CSF3R, PCLO, MIPOL1
+
+
+# "#00A3E0", "#D9027D"
+gse_msigdb_bal <- readRDS("geeglm_gxpvsbact_BALonly_adjagesexpatient_082625_GSEA.RDS")
+gse_msigdb_bal_df <- as.data.frame(gse_msigdb_bal)
+gse_msigdb_nasal <- readRDS("geeglm_gxpvsbact_nasalonly_adjagesexpatient_082625_GSEA.RDS")
+gse_msigdb_nasal_df <- as.data.frame(gse_msigdb_nasal)
+
+gse_msigdb_bal_df_top10 <- gse_msigdb_bal_df %>% arrange(desc(NES)) %>% slice_head(n = 10)
+gse_msigdb_bal_df_bottom10 <- gse_msigdb_bal_df %>% arrange(NES) %>% slice_head(n = 10)
+
+gse_msigdb_nasal_df_top10 <- gse_msigdb_nasal_df %>% arrange(desc(NES)) %>% slice_head(n = 10)
+gse_msigdb_nasal_df_bottom10 <- gse_msigdb_nasal_df %>% arrange(NES) %>% slice_head(n = 10)
+
+
+p1 <- ggplot(gse_msigdb_bal_df_top10, aes(x = NES, y = reorder(ID, NES), size = -log10(p.adjust))) +  geom_point(color = "#00A3E0") +  scale_size_continuous(name = "-log10(p.adjust)", range=c(2,10), limits = c(0,10)) + xlim(-5,5) + theme(axis.text.y = element_blank())
+p2 <- ggplot(gse_msigdb_bal_df_bottom10, aes(x = NES, y = reorder(ID, NES), size = -log10(p.adjust))) +  geom_point(color = "#00A3E0") +  scale_size_continuous(name = "-log10(p.adjust)", range=c(2,10), limits = c(0,10)) + xlim(-5,5) + theme(axis.text.y = element_blank())
+p3 <- ggplot(gse_msigdb_nasal_df_top10, aes(x = NES, y = reorder(ID, NES), size = -log10(p.adjust))) +  geom_point(color = "#D9027D") +  scale_size_continuous(name = "-log10(p.adjust)", range=c(2,10), limits = c(0,10)) + xlim(-5,5) + theme(axis.text.y = element_blank())
+p4 <- ggplot(gse_msigdb_nasal_df_bottom10, aes(x = NES, y = reorder(ID, NES), size = -log10(p.adjust))) +  geom_point(color = "#D9027D") +  scale_size_continuous(name = "-log10(p.adjust)", range=c(2,10), limits = c(0,10)) + xlim(-5,5) + theme(axis.text.y = element_blank())
+plot_grid(p1, p3, p2, p4, ncol=2, align="v")
+
+
+##### SEPARATE BY GOBP, HALLMARK, REACTOME
+pcol <- if ("p.adjust" %in% names(gse_msigdb_df)) {"p.adjust"} else if ("pvalue" %in% names(gse_msigdb_df)) {"pvalue"} else {stop("No p.adjust or pvalue column found in gse_msigdb_df")}
+
+# 2) Keep only the three families of interest & tag them
+plot_df <- gse_msigdb_df %>% mutate(family = case_when(
+      str_detect(ID, regex("hallmark", ignore_case = TRUE)) ~ "hallmark",
+      str_detect(ID, regex("reactome", ignore_case = TRUE)) ~ "reactome",
+      str_detect(ID, regex("gobp",    ignore_case = TRUE)) ~ "gobp", TRUE ~ NA_character_ )) %>%
+  filter(!is.na(family), NES > 0) %>% group_by(family) %>%  slice_max(order_by = NES, n = 3, with_ties = FALSE) %>%  # top 3 per family
+  ungroup() %>% mutate(neglog10p = -log10(.data[[pcol]]))
+plot_df <- plot_df %>% mutate(ID = substr(ID, 1, 30))
+plot_df$ID <- make.unique(plot_df$ID)
+
+# 3) Plot: x = NES, y = ID, size/color by p-value (-log10)
+p_nasal_up <- ggplot(plot_df, aes(x = NES, y = reorder(ID, NES), size = neglog10p)) +  geom_point(color = "#D9027D") +  scale_size_continuous(name = expression(-log[10](p)), range=c(2,10), limits = c(0,10)) +  labs(x = "Enrichment score (ES)", y = NULL, title = "Top positively enriched gene sets (Hallmark, Reactome, GO:BP)") +  theme_minimal(base_size = 12) +  theme(axis.text.y = element_text(size = 9))+ facet_grid(family ~ ., scales = "free_y", space = "free_y") + xlim(-5,5)
+
+# 2) Keep only the three families of interest & tag them
+plot_df <- gse_msigdb_df %>% mutate(family = case_when(
+      str_detect(ID, regex("hallmark", ignore_case = TRUE)) ~ "hallmark",
+      str_detect(ID, regex("reactome", ignore_case = TRUE)) ~ "reactome",
+      str_detect(ID, regex("gobp",    ignore_case = TRUE)) ~ "gobp", TRUE ~ NA_character_ )) %>%
+  filter(!is.na(family), NES < 0) %>% group_by(family) %>%  slice_min(order_by = NES, n = 3, with_ties = FALSE) %>%  # top 3 per family
+  ungroup() %>% mutate(neglog10p = -log10(.data[[pcol]]))
+plot_df <- plot_df %>% mutate(ID = substr(ID, 1, 30))
+plot_df$ID <- make.unique(plot_df$ID)
+
+# 3) Plot: x = NES, y = ID, size/color by p-value (-log10)
+p_nasal_down <- ggplot(plot_df, aes(x = NES, y = reorder(ID, NES), size = neglog10p)) +  geom_point(color = "#D9027D") +  scale_size_continuous(name = expression(-log[10](p)), range=c(2,10), limits = c(0,10)) +  labs(x = "Enrichment score (ES)", y = NULL, title = "Top negatively enriched gene sets (Hallmark, Reactome, GO:BP)") +  theme_minimal(base_size = 12) +  theme(axis.text.y = element_text(size = 9)) + facet_grid(family ~ ., scales = "free_y", space = "free_y") + xlim(-5,5)
+
+
+plot_grid(p_bal_down, p_bal_up, p_nasal_down, p_nasal_up, ncol=2, align="v")
+plot_grid(p_bal_up, p_nasal_up, p_bal_down, p_nasal_down, ncol=2, align="v")
+
+
+
+
+
+
+
+
+
+
+
+#### TEST FOR INTERACTION/DIFFERENCES
+model <- geeglm(CSF3R ~ Bacteria*site + age_at_study_years + as.factor(sex), id=as.factor(patient_id), family = gaussian, corstr = "independence", data = df)
+summary(model)        
+
+
+
+### NOW LOOP
+#varlist <- colnames(genecounts_vst_merge_sub[,1:100]) # List of variables using gene counts IN COMMON in both BAL & nasal
+varlist <- colnames(genecounts_vst_merge_sub) # List of variables using gene counts IN COMMON in both BAL & nasal
+
+results_df <- map_dfr(varlist, function(var) {
+  message("Fitting: ", var); flush.console()
+  fml <- as.formula(sprintf("`%s` ~ Bacteria*site + age_at_study_years + as.factor(sex)", var))
+  model <- geeglm(fml, id=as.factor(patient_id), family = gaussian, corstr = "independence", data = df)
+  tidy(model, conf.int = TRUE) %>% mutate(outcome = var) %>% 
+    dplyr::select(outcome, term, estimate, conf.low, conf.high, p.value)
+})
+
+
+## NOW APPLY FDR CORRECTION TO JUST THE desired P-VALUES
+results_df_sub <- results_df[which(results_df$term=="Bacteria:siteNasal"),]
+results_df_sub$fdr <- p.adjust(results_df_sub$p.value, method="fdr")
+nrow(results_df_sub[which(results_df_sub$fdr<0.05),]) 
+results_df_merge <- left_join(results_df, results_df_sub)
+head(results_df_merge, n=10)
+
+#write.csv(results_df_merge, "geeglm_gxpvsbactsiteinteraction_adjagesexpatient_082625.csv")
+
+
+
+df_gxp_vs_bacteria <- read.csv("geeglm_gxpvsbactsiteinteraction_adjagesexpatient_082625.csv", header=TRUE, row.names=1, check.names=FALSE)
+df_gxp_vs_bacteria_sub <- df_gxp_vs_bacteria[which(df_gxp_vs_bacteria$fdr<0.05),]
+
+degs <- df_gxp_vs_bacteria_sub$outcome
+geneList <- df_gxp_vs_bacteria_sub$estimate # put LogFC here from edgeR output (tops_filt)
+names(geneList) <- as.character(degs) # put gene SYMBOL here
+geneList = sort(geneList, decreasing = TRUE)
+
+gse_msigdb <- GSEA(geneList, TERM2GENE = m_t2g, minGSSize = 10, maxGSSize = 300, pvalueCutoff = 0.05, pAdjustMethod = "BH",  by = "fgsea") 
+
+head(gse_msigdb, 40)
+gse_msigdb_df <- as.data.frame(gse_msigdb)
+gse_msigdb_df <- gse_msigdb_df[ which(gse_msigdb_df$p.adjust<=0.05), ]
+
+saveRDS(gse_msigdb, "geeglm_gxpvsbactsiteinteraction_adjagesexpatient_082625_GSEA.RDS")
+#write.csv(gse_msigdb_df, "geeglm_gxpvsbactsiteinteraction_adjagesexpatient_082625_GSEA.csv")
+gse_msigdb_df <- read.csv("geeglm_gxpvsbactsiteinteraction_adjagesexpatient_082625_GSEA.csv", header=TRUE, row.names=1, check.names=FALSE)
+
+ridgeplot(gse_msigdb, showCategory = 30, fill = "p.adjust", core_enrichment = TRUE, label_format = 80) + theme(axis.text.y = element_text(size=8)) # + facet_grid(cols = vars(ifelse(value > 0, "Positive", ifelse(value < 0, "Negative", "Zero"))))
+enrichplot::dotplot(gse_msigdb_df, showCategory = 25, split=".sign", label_format = 80) + facet_grid(.~.sign) + theme(axis.text.y = element_text(size=8))
+cnetplot(gse_msigdb, categorySize="pvalue", node_label="gene", foldChange=geneList, showCategory=50) + theme(plot.caption = element_text(size=2))
+gse_msigdb_termsim <- pairwise_termsim(gse_msigdb, showCategory = 2000)
+emapplot(gse_msigdb_termsim, showCategory=200, nCluster=4, color="enrichmentScore", group=TRUE, size_category=0.3, node_label="none") 
+ssplot(gse_msigdb_termsim, showCategory=200, group=TRUE, node_label="group", nCluster=4)
+
+
+
+
+## BAL cell type x BAL bacterial mass?
+df <- merge(bal_cells, bal_domain, by="row.names")
+rownames(df) <- df$Row.names   
+df <- subset(df, select=-1)
+rownames(meta) <- meta$sample_id
+df <- merge(df, meta, by="row.names")
+df <- subset(df, select=-1)
+
+model <- geeglm(Myeloid...Alveolar.Macrophage ~ Bacteria + age_at_study_years + as.factor(sex), id=as.factor(patient_id), family = gaussian, corstr = "independence", data = df)
+summary(model)    
+
+df$Myeloid...cDC1
+model <- geeglm(Myeloid...cDC2 ~ Bacteria + age_at_study_years + as.factor(sex), id=as.factor(patient_id), family = gaussian, corstr = "independence", data = df)
+summary(model)    
+
+
+```
+#... Healthy
+```{r}
+
+df <- cbind(bal_domain_healthy, bal_genecounts_healthy_vst)
+df <- cbind(df, meta_healthy)
+    
+
+#### TEST FOR ASSOCIATIONS IN BAL & THEN SEPARATELY IN NASAL, COMPARE LISTS
+
+## test for association
+model <- glm(CXCL8 ~ Bacteria + age_at_study_years + as.factor(sex), family = gaussian, data = df)
+summary(model)        
+
+
+### NOW LOOP
+
+bal_genecounts_vst_filter <- filterGenes(t(bal_genecounts_healthy_vst), filterTypes = c("central", "dispersion"), filterCentralType = "median", filterCentralPercentile = 0.4, filterDispersionType = "cv", filterDispersionPercentile = 0.4, sequential = TRUE)
+
+varlist <- rownames(bal_genecounts_vst_filter) # List of variables using gene counts IN COMMON in both BAL & nasal
+length(varlist)
+
+results_df <- map_dfr(varlist, function(var) {
+  message("Fitting: ", var); flush.console()
+  fml <- as.formula(sprintf("`%s` ~ Bacteria + age_at_study_years + as.factor(sex)", var))
+  model <- glm(fml, family = gaussian, data = df)
+  tidy(model, conf.int = TRUE) %>% mutate(outcome = var) %>% 
+    dplyr::select(outcome, term, estimate, conf.low, conf.high, p.value)
+})
+
+    results_df <- read.csv("geeglm_gxpvsbact_HEALTHYBALonly_varfilt02_adjagesexpatient_031626.csv", header=TRUE, row.names=1, check.names=FALSE)
+    results_df <- read.csv("geeglm_gxpvsbact_HEALTHYnasalonly_varfilt02_adjagesexpatient_031626.csv", header=TRUE, row.names=1, check.names=FALSE)
+## NOW APPLY FDR CORRECTION TO JUST THE desired P-VALUES
+results_df$fdr <- NULL
+results_df <- results_df %>% filter(outcome %in% varlist)
+
+results_df_sub <- results_df[which(results_df$term=="Bacteria"),]
+results_df_sub$fdr <- p.adjust(results_df_sub$p.value, method="fdr")
+nrow(results_df_sub[which(results_df_sub$fdr<0.05),]) 
+results_df_merge <- left_join(results_df, results_df_sub)
+head(results_df_merge, n=10)
+
+#write.csv(results_df_merge, "geeglm_gxpvsbact_HEALTHYBALonly_varfilt02_adjagesexpatient_031726.csv")
+#write.csv(results_df_merge, "geeglm_gxpvsbact_HEALTHYnasalonly_varfilt02_adjagesexpatient_031726.csv")
+
+
+
+##### GSEA
+#results_df_sub <- read.csv("geeglm_gxpvsbact_HEALTHYBALonly_varfilt02_adjagesexpatient_031626.csv", header=TRUE, row.names=1, check.names=FALSE)
+results_df_sub <- read.csv("geeglm_gxpvsbact_HEALTHYnasalonly_varfilt02_adjagesexpatient_031626.csv", header=TRUE, row.names=1, check.names=FALSE)
+results_df_sub <- results_df_sub[which(results_df_sub$fdr<0.05),]
+
+degs <- results_df_sub$outcome
+geneList <- results_df_sub$estimate # put LogFC here from edgeR output (tops_filt)
+names(geneList) <- as.character(degs) # put gene SYMBOL here
+geneList = sort(geneList, decreasing = TRUE)
+head(geneList)
+length(geneList)
+
+gse_msigdb <- GSEA(geneList, TERM2GENE = m_t2g, minGSSize = 10, maxGSSize = 300, pvalueCutoff = 0.05, pAdjustMethod = "BH",  by = "fgsea") 
+
+head(gse_msigdb, 40)
+gse_msigdb_df <- as.data.frame(gse_msigdb)
+gse_msigdb_df <- gse_msigdb_df[ which(gse_msigdb_df$p.adjust<=0.05), ]
+
+#saveRDS(gse_msigdb, "geeglm_gxpvsbact_HEALTHYnasalonly_varfilt02_adjagesexpatient_031626_GSEA.RDS")
+#write.csv(gse_msigdb_df, "geeglm_gxpvsbact_HEALTHYnasalonly_varfilt02_adjagesexpatient_031626_GSEA.csv")
+
+```
+# Analysis 4b - viruses-gxp correlations
+```{r}
+
+
+#### TEST FOR ASSOCIATIONS IN BAL & THEN SEPARATELY IN NASAL, COMPARE LISTS
+bal_domain_temp <- bal_domain
+bal_domain_temp <- log10(bal_domain+0.0001)
+rownames(bal_domain_temp) <- paste0(rownames(bal_domain_temp), "_BAL")
+nasal_domain_temp <- nasal_domain
+nasal_domain_temp <- log10(nasal_domain+0.0001)
+rownames(nasal_domain_temp) <- paste0(rownames(nasal_domain_temp), "_Nasal")
+domain_merge <- rbind(bal_domain_temp, nasal_domain_temp)
+
+bal_meta_temp <- meta
+bal_meta_temp$site <- "BAL"
+rownames(bal_meta_temp) <- paste0(rownames(bal_meta_temp), "_BAL")
+nasal_meta_temp <- meta
+nasal_meta_temp$site <- "Nasal"
+rownames(nasal_meta_temp) <- paste0(rownames(nasal_meta_temp), "_Nasal")
+meta_merge <- rbind(bal_meta_temp, nasal_meta_temp)
+
+df <- merge(genecounts_vst_merge, domain_merge, by="row.names")
+rownames(df) <- df$Row.names   
+df <- subset(df, select=-1)
+df <- merge(df, meta_merge, by="row.names")
+df <- subset(df, select=-1)
+
+## test for association
+df_sub <- df[which(df$site=="BAL"),]
+model <- geeglm(OAS2 ~ Viruses + age_at_study_years + as.factor(sex), id=as.factor(patient_id), family = gaussian, corstr = "independence", data = df_sub)
+summary(model)        
+
+df_sub <- df[which(df$site=="Nasal"),]
+model <- geeglm(OAS2 ~ Viruses + age_at_study_years + as.factor(sex), id=as.factor(patient_id), family = gaussian, corstr = "independence", data = df_sub)
+summary(model)        
+
+
+
+### NOW LOOP
+df_sub <- df[which(df$site=="BAL"),]
+df_sub <- df[which(df$site=="Nasal"),]
+
+
+bal_genecounts_vst_filter <- filterGenes(t(bal_genecounts_vst), filterTypes = c("central", "dispersion"), filterCentralType = "median", filterCentralPercentile = 0.2, filterDispersionType = "cv", filterDispersionPercentile = 0.2, sequential = TRUE)
+
+nasal_genecounts_vst_filter <- filterGenes(t(nasal_genecounts_vst), filterTypes = c("central", "dispersion"), filterCentralType = "median", filterCentralPercentile = 0.2, filterDispersionType = "cv", filterDispersionPercentile = 0.2, sequential = TRUE)
+
+varlist <- rownames(nasal_genecounts_vst_filter) # List of variables using gene counts IN COMMON in both BAL & nasal
+varlist <- rownames(nasal_genecounts_vst_filter) # List of variables using gene counts IN COMMON in both BAL & nasal
+
+results_df <- map_dfr(varlist, function(var) {
+  message("Fitting: ", var); flush.console()
+  fml <- as.formula(sprintf("`%s` ~ Viruses + age_at_study_years + as.factor(sex)", var))
+  model <- geeglm(fml, id=as.factor(patient_id), family = gaussian, corstr = "independence", data = df_sub)
+  tidy(model, conf.int = TRUE) %>% mutate(outcome = var) %>% 
+    dplyr::select(outcome, term, estimate, conf.low, conf.high, p.value)
+})
+
+## NOW APPLY FDR CORRECTION TO JUST THE desired P-VALUES
+results_df_sub <- results_df[which(results_df$term=="Viruses"),]
+results_df_sub$fdr <- p.adjust(results_df_sub$p.value, method="fdr")
+nrow(results_df_sub[which(results_df_sub$fdr<0.05),]) 
+results_df_merge <- left_join(results_df, results_df_sub)
+head(results_df_merge, n=10)
+
+#write.csv(results_df_merge, "geeglm_gxpvsviruses_balonly_varfilt02_adjagesexpatient_082625.csv")
+#write.csv(results_df_merge, "geeglm_gxpvsviruses_nasalonly_varfilt02_adjagesexpatient_082625.csv")
+
+
+#### Analyze results
+df_gxp_vs_viruses_bal <- read.csv("geeglm_gxpvsviruses_balonly_varfilt02_adjagesexpatient_082625.csv", header=TRUE, row.names=1, check.names=FALSE)
+df_gxp_vs_viruses_bal <- df_gxp_vs_viruses_bal[which(df_gxp_vs_viruses_bal$term=="Viruses"),]
+df_gxp_vs_viruses_bal <- df_gxp_vs_viruses_bal[which(df_gxp_vs_viruses_bal$fdr<0.05),]
+nrow(df_gxp_vs_viruses_bal)
+df_gxp_vs_viruses_nasal <- read.csv("geeglm_gxpvsviruses_nasalonly_varfilt02_adjagesexpatient_082625.csv", header=TRUE, row.names=1, check.names=FALSE)
+df_gxp_vs_viruses_nasal <- df_gxp_vs_viruses_nasal[which(df_gxp_vs_viruses_nasal$term=="Viruses"),]
+df_gxp_vs_viruses_nasal <- df_gxp_vs_viruses_nasal[which(df_gxp_vs_viruses_nasal$fdr<0.05),]
+nrow(df_gxp_vs_viruses_nasal)
+
+
+#### Pathway enrichment
+df_gxp_vs_viruses <- read.csv("geeglm_gxpvsviruses_balonly_varfilt02_adjagesexpatient_082625.csv", header=TRUE, row.names=1, check.names=FALSE)
+df_gxp_vs_viruses <- read.csv("geeglm_gxpvsviruses_nasalonly_varfilt02_adjagesexpatient_082625.csv", header=TRUE, row.names=1, check.names=FALSE)
+df_gxp_vs_viruses_sub <- df_gxp_vs_viruses[which(df_gxp_vs_viruses$fdr<0.05),]
+nrow(df_gxp_vs_viruses_sub)
+
+degs <- df_gxp_vs_viruses_sub$outcome
+geneList <- df_gxp_vs_viruses_sub$estimate # put LogFC here from edgeR output (tops_filt)
+names(geneList) <- as.character(degs) # put gene SYMBOL here
+geneList = sort(geneList, decreasing = TRUE)
+
+gse_msigdb <- GSEA(geneList, TERM2GENE = m_t2g, minGSSize = 10, maxGSSize = 300, pvalueCutoff = 0.05, pAdjustMethod = "BH",  by = "fgsea") 
+
+head(gse_msigdb, 40)
+gse_msigdb_df <- as.data.frame(gse_msigdb)
+gse_msigdb_df <- gse_msigdb_df[ which(gse_msigdb_df$p.adjust<=0.05), ]
+
+#saveRDS(gse_msigdb, "geeglm_gxpvsviruses_balonly_varfilt02_adjagesexpatient_082625_GSEA.RDS")
+#write.csv(gse_msigdb_df, "geeglm_gxpvsviruses_balonly_varfilt02_adjagesexpatient_082625_GSEA.csv")
+#saveRDS(gse_msigdb, "geeglm_gxpvsviruses_nasalonly_varfilt02_adjagesexpatient_082625_GSEA.RDS")
+#write.csv(gse_msigdb_df, "geeglm_gxpvsviruses_nasalonly_varfilt02_adjagesexpatient_082625_GSEA.RDS")
+
+
+## show example?
+df %>%  mutate(site = factor(site)) %>%
+  ggplot(aes(x = OAS2, y = Viruses)) +
+  geom_point(alpha = 0.7) +  geom_smooth(method = "lm", se = FALSE) +   # optional trend line
+  facet_wrap(~ site, nrow = 1) +  # two separate panels
+  theme_bw() + theme(panel.grid = element_blank()) +  labs(title = "GXP vs. Viruses by Site", x = "OAS2", y = "Viruses")
+
+```
+
+
+# Analysis 4c - eukaryota-gxp correlations
+
+```{r}
+
+
+#### TEST FOR ASSOCIATIONS IN BAL & THEN SEPARATELY IN NASAL, COMPARE LISTS
+bal_domain_temp <- bal_domain
+bal_domain_temp <- log10(bal_domain+0.0001)
+rownames(bal_domain_temp) <- paste0(rownames(bal_domain_temp), "_BAL")
+nasal_domain_temp <- nasal_domain
+nasal_domain_temp <- log10(nasal_domain+0.0001)
+rownames(nasal_domain_temp) <- paste0(rownames(nasal_domain_temp), "_Nasal")
+domain_merge <- rbind(bal_domain_temp, nasal_domain_temp)
+
+bal_meta_temp <- meta
+bal_meta_temp$site <- "BAL"
+rownames(bal_meta_temp) <- paste0(rownames(bal_meta_temp), "_BAL")
+nasal_meta_temp <- meta
+nasal_meta_temp$site <- "Nasal"
+rownames(nasal_meta_temp) <- paste0(rownames(nasal_meta_temp), "_Nasal")
+meta_merge <- rbind(bal_meta_temp, nasal_meta_temp)
+
+df <- merge(genecounts_vst_merge, domain_merge, by="row.names")
+rownames(df) <- df$Row.names   
+df <- subset(df, select=-1)
+df <- merge(df, meta_merge, by="row.names")
+df <- subset(df, select=-1)
+
+## test for association
+df_sub <- df[which(df$site=="BAL"),]
+model <- geeglm(CXCL8 ~ Eukaryota + age_at_study_years + as.factor(sex), id=as.factor(patient_id), family = gaussian, corstr = "independence", data = df_sub)
+summary(model)        
+
+df_sub <- df[which(df$site=="Nasal"),]
+model <- geeglm(CXCL8 ~ Eukaryota + age_at_study_years + as.factor(sex), id=as.factor(patient_id), family = gaussian, corstr = "independence", data = df_sub)
+summary(model)        
+
+
+
+### NOW LOOP
+df_sub <- df[which(df$site=="BAL"),]
+df_sub <- df[which(df$site=="Nasal"),]
+
+bal_genecounts_vst_filter <- filterGenes(t(bal_genecounts_vst), filterTypes = c("central", "dispersion"), filterCentralType = "median", filterCentralPercentile = 0.2, filterDispersionType = "cv", filterDispersionPercentile = 0.2, sequential = TRUE)
+
+nasal_genecounts_vst_filter <- filterGenes(t(nasal_genecounts_vst), filterTypes = c("central", "dispersion"), filterCentralType = "median", filterCentralPercentile = 0.2, filterDispersionType = "cv", filterDispersionPercentile = 0.2, sequential = TRUE)
+
+varlist <- rownames(nasal_genecounts_vst_filter) # List of variables using gene counts IN COMMON in both BAL & nasal
+varlist <- rownames(nasal_genecounts_vst_filter) # List of variables using gene counts IN COMMON in both BAL & nasal
+
+results_df <- map_dfr(varlist, function(var) {
+  message("Fitting: ", var); flush.console()
+  fml <- as.formula(sprintf("`%s` ~ Eukaryota + age_at_study_years + as.factor(sex)", var))
+  model <- geeglm(fml, id=as.factor(patient_id), family = gaussian, corstr = "independence", data = df_sub)
+  tidy(model, conf.int = TRUE) %>% mutate(outcome = var) %>% 
+    dplyr::select(outcome, term, estimate, conf.low, conf.high, p.value)
+})
+
+## NOW APPLY FDR CORRECTION TO JUST THE desired P-VALUES
+results_df_sub <- results_df[which(results_df$term=="Eukaryota"),]
+results_df_sub$fdr <- p.adjust(results_df_sub$p.value, method="fdr")
+nrow(results_df_sub[which(results_df_sub$fdr<0.05),]) 
+results_df_merge <- left_join(results_df, results_df_sub)
+head(results_df_merge, n=10)
+
+#write.csv(results_df_merge, "geeglm_gxpvseukaryota_balonly_varfilt02_adjagesexpatient_082625.csv")
+#write.csv(results_df_merge, "geeglm_gxpvseukaryota_nasalonly_varfilt02_adjagesexpatient_082625.csv")
+
+
+#### Analyze results
+df_gxp_vs_eukaryota_bal <- read.csv("geeglm_gxpvseukaryota_balonly_varfilt02_adjagesexpatient_082625.csv", header=TRUE, row.names=1, check.names=FALSE)
+df_gxp_vs_eukaryota_bal <- df_gxp_vs_eukaryota_bal[which(df_gxp_vs_eukaryota_bal$term=="Eukaryota"),]
+df_gxp_vs_eukaryota_bal <- df_gxp_vs_eukaryota_bal[which(df_gxp_vs_eukaryota_bal$fdr<0.05),]
+nrow(df_gxp_vs_eukaryota_bal)
+df_gxp_vs_eukaryota_nasal <- read.csv("geeglm_gxpvseukaryota_nasalonly_varfilt02_adjagesexpatient_082625.csv", header=TRUE, row.names=1, check.names=FALSE)
+df_gxp_vs_eukaryota_nasal <- df_gxp_vs_eukaryota_nasal[which(df_gxp_vs_eukaryota_nasal$term=="eukaryota"),]
+df_gxp_vs_eukaryota_nasal <- df_gxp_vs_eukaryota_nasal[which(df_gxp_vs_eukaryota_nasal$fdr<0.05),]
+nrow(df_gxp_vs_eukaryota_nasal)
+
+
+#### Pathway Enrichment
+df_gxp_vs_eukaryota <- read.csv("geeglm_gxpvseukaryota_balonly_varfilt02_adjagesexpatient_082625.csv", header=TRUE, row.names=1, check.names=FALSE)
+df_gxp_vs_eukaryota_sub <- df_gxp_vs_eukaryota[which(df_gxp_vs_eukaryota$fdr<0.05),]
+
+degs <- df_gxp_vs_eukaryota_sub$outcome
+geneList <- df_gxp_vs_eukaryota_sub$estimate # put LogFC here from edgeR output (tops_filt)
+names(geneList) <- as.character(degs) # put gene SYMBOL here
+geneList = sort(geneList, decreasing = TRUE)
+
+gse_msigdb <- GSEA(geneList, TERM2GENE = m_t2g, minGSSize = 10, maxGSSize = 300, pvalueCutoff = 0.05, pAdjustMethod = "BH",  by = "fgsea") 
+
+head(gse_msigdb, 40)
+gse_msigdb_df <- as.data.frame(gse_msigdb)
+gse_msigdb_df <- gse_msigdb_df[ which(gse_msigdb_df$p.adjust<=0.05), ]
+
+saveRDS(gse_msigdb, "geeglm_gxpvseukaryota_balonly_varfilt02_adjagesexpatient_082625_GSEA.RDS")
+#write.csv(gse_msigdb_df, "geeglm_gxpvseukaryota_balonly_varfilt02_adjagesexpatient_082625_GSEA.CSV")
+
+
+## Show example gene
+df %>%  mutate(site = factor(site)) %>%
+  ggplot(aes(x = CLTB, y = Eukaryota)) +
+  geom_point(alpha = 0.7) +  geom_smooth(method = "lm", se = FALSE) +   # optional trend line
+  facet_wrap(~ site, nrow = 1) +  # two separate panels
+  theme_bw() + theme(panel.grid = element_blank()) +  labs(title = "GXP vs. Eukaryota by Site", x = "FTL", y = "Eukaryota")
+
+```
+
+
+#.
+# Analysis 5a - DEGs assoc w composite outcome
+```{r}
+
+
+#### TEST FOR ASSOCIATIONS IN BAL & THEN SEPARATELY IN NASAL, COMPARE LISTS
+bal_meta_temp <- meta
+bal_meta_temp$site <- "BAL"
+rownames(bal_meta_temp) <- bal_meta_temp$sample_id
+rownames(bal_meta_temp) <- paste0(rownames(bal_meta_temp), "_BAL")
+nasal_meta_temp <- meta
+nasal_meta_temp$site <- "Nasal"
+rownames(nasal_meta_temp) <- nasal_meta_temp$sample_id
+rownames(nasal_meta_temp) <- paste0(rownames(nasal_meta_temp), "_Nasal")
+meta_merge <- rbind(bal_meta_temp, nasal_meta_temp)
+
+df <- merge(genecounts_vst_merge, meta_merge, by="row.names")
+rownames(df) <- df$Row.names   
+df <- subset(df, select=-1)
+
+
+## test for associations
+########## n=189
+df_sub <- df[which(df$site=="BAL"),]
+n_distinct(df_sub$sample_id)
+n_distinct(df_sub$hospitalization_id)
+n_distinct(df_sub$patient_id)
+table(df_sub$deadorvent7d)
+model <- geeglm(FN1 ~ as.factor(deadorvent7d) + age_at_study_years + as.factor(sex), id=as.factor(hospitalization_id), family = gaussian, corstr = "exchangeable", data = df_sub)
+summary(model)  
+
+
+########## n=180
+df_sub <- df[which(df$site=="BAL"),]
+df_sub <- df_sub %>% group_by(hospitalization_id) %>% slice_max(order_by = as.numeric(age_at_study_years), n = 1) %>% ungroup() ## this keeps most recent hospitalization per-patient
+n_distinct(df_sub$sample_id)
+n_distinct(df_sub$hospitalization_id)
+n_distinct(df_sub$patient_id)
+table(df_sub$deadorvent7d)
+model <- geeglm(FN1 ~ as.factor(deadorvent7d) + age_at_study_years + as.factor(sex), id=as.factor(patient_id), family = poisson, corstr = "independence", data = df_sub)
+summary(model)   
+
+
+########## n=160
+df_sub <- df[which(df$site=="BAL"),]
+df_sub <- df_sub %>% group_by(patient_id) %>% slice_max(order_by = as.numeric(age_at_study_years), n = 1) %>% ungroup()  ## n=160
+n_distinct(df_sub$sample_id)
+n_distinct(df_sub$hospitalization_id)
+n_distinct(df_sub$patient_id)
+table(df_sub$deadorvent7d)
+model <- geeglm(FN1 ~ as.factor(deadorvent7d) + age_at_study_years + as.factor(sex), id=as.factor(patient_id), family = gaussian, corstr = "independence", data = df_sub)
+summary(model)  
+ 
+
+
+### NOW LOOP
+#### pick patients
+#df_sub <- df[which(df$site=="BAL"),]
+df_sub <- df[which(df$site=="Nasal"),]
+
+#df_sub <- df_sub %>% group_by(patient_id) %>% slice_max(order_by = as.numeric(age_at_study_years), n = 1) %>% ungroup()  ## n160 =this keeps most recent record per-patient
+#df_sub <- df_sub %>% group_by(hospitalization_id) %>% slice_max(order_by = as.numeric(age_at_study_years), n = 1) %>% ungroup() ## n180 = this keeps most recent hospitalization per-patient
+
+#### pick inputs
+#bal_genecounts_vst_filter <- filterGenes(t(bal_genecounts_vst), filterTypes = c("central", "dispersion"), filterCentralType = "median", filterCentralPercentile = 0.2, filterDispersionType = "cv", filterDispersionPercentile = 0.2, sequential = TRUE)
+
+nasal_genecounts_vst_filter <- filterGenes(t(nasal_genecounts_vst), filterTypes = c("central", "dispersion"), filterCentralType = "median", filterCentralPercentile = 0.2, filterDispersionType = "cv", filterDispersionPercentile = 0.2, sequential = TRUE)
+
+#varlist <- rownames(bal_genecounts_vst_filter) # List of variables using gene counts IN COMMON in both BAL & nasal
+varlist <- rownames(nasal_genecounts_vst_filter) # List of variables using gene counts IN COMMON in both BAL & nasal
+
+nrow(df_sub)
+length(varlist)
+
+#### pick model
+results_df <- map_dfr(varlist, function(var) {
+  message("Fitting: ", var); flush.console()
+  fml <- as.formula(sprintf("`%s` ~ as.factor(deadorvent7d) + age_at_study_years + as.factor(sex)", var))
+  model <- geeglm(fml, id=as.factor(patient_id), family = gaussian, corstr = "independence", data = df_sub)
+  tidy(model, conf.int = TRUE) %>% mutate(outcome = var) %>% 
+    dplyr::select(outcome, term, estimate, conf.low, conf.high, p.value)
+})
+
+        results_df <- map_dfr(varlist, function(var) {
+          message("Fitting: ", var); flush.console()
+          fml <- as.formula(sprintf("`%s` ~ as.factor(deadorvent7d) + age_at_study_years + as.factor(sex)", var))
+          model <- geeglm(fml, id=as.factor(hospitalization_id), family = gaussian, corstr = "exchangeable", data = df_sub)
+          tidy(model, conf.int = TRUE) %>% mutate(outcome = var) %>% 
+            dplyr::select(outcome, term, estimate, conf.low, conf.high, p.value)
+        })
+
+## NOW APPLY FDR CORRECTION TO JUST THE desired P-VALUES
+results_df_sub <- results_df[which(results_df$term=="as.factor(deadorvent7d)1"),]
+results_df_sub$fdr <- p.adjust(results_df_sub$p.value, method="fdr")
+nrow(results_df_sub[which(results_df_sub$fdr<0.05),]) 
+results_df_merge <- left_join(results_df, results_df_sub)
+head(results_df_merge, n=10)
+
+#write.csv(results_df_merge, "geeglm_gxpvsdeadorvent7d_balonly_adjagesexpatient_090325_n189exchangeable.csv")
+#write.csv(results_df_merge, "geeglm_gxpvsdeadorvent7d_balonly_adjagesexpatient_090325_n180independence.csv")
+#write.csv(results_df_merge, "geeglm_gxpvsdeadorvent7d_balonly_adjagesexpatient_090325_n160independence.csv")
+
+#write.csv(results_df_merge, "geeglm_gxpvsdeadorvent7d_nasalonly_adjagesexpatient_090325_n189exchangeable.csv")
+#write.csv(results_df_merge, "geeglm_gxpvsdeadorvent7d_nasalonly_adjagesexpatient_090325_n180independence.csv")
+#write.csv(results_df_merge, "geeglm_gxpvsdeadorvent7d_nasalonly_adjagesexpatient_090325_n160independence.csv")
+
+#### Figure 5a - venn diagram
+
+
+## show example?
+df_sub <- df[which(df$site=="BAL"),]
+df_sub <- df %>% group_by(patient_id) %>% slice_max(order_by = as.numeric(age_at_study_years), n = 1) %>% ungroup()  ## n160 =this keeps most recent record per-patient
+
+df_sub %>%  mutate(site = factor(site)) %>%
+  ggplot(aes(x= as.factor(deadorvent7d), y = CEACAM6)) +
+  geom_violin(trim=TRUE) + geom_boxplot(width=0.3, color="blue", outlier.shape = NA) + geom_jitter(shape=16, position=position_jitter(0.1)) +
+  facet_wrap(~ site, nrow = 1) +  # two separate panels
+  theme_bw() + theme(panel.grid = element_blank()) +  labs(title = "GXP vs. deadorvent7d by Site", x = "CEACAM6", y = "deadorvent7d")
+
+
+##
+meta_sub <- meta
+meta_sub$CEACAM6_BAL <- bal_genecounts_vst$CEACAM6
+meta_sub$CEACAM6_Nasal <- nasal_genecounts_vst$CEACAM6
+meta_sub$MUC19_BAL <- bal_genecounts_vst$MUC19
+meta_sub$MUC19_Nasal <- nasal_genecounts_vst$MUC19
+meta_sub$CD74_BAL <- bal_genecounts_vst$CD74
+meta_sub$CD74_Nasal <- nasal_genecounts_vst$CD74
+meta_sub$HLA.DRA_BAL <- bal_genecounts_vst$HLA.DRA
+meta_sub$HLA.DRA_Nasal <- nasal_genecounts_vst$HLA.DRA
+
+meta_sub <- meta_sub %>% group_by(patient_id) %>% slice_max(order_by = as.numeric(age_at_study_years), n = 1) %>% ungroup() 
+
+p1 <- ggplot(meta_sub, aes(x = as.factor(deadorvent7d), y = CEACAM6_BAL)) + geom_violin(trim=TRUE) + geom_boxplot(width=0.3, color="blue", outlier.shape = NA) + geom_jitter(shape=16, position=position_jitter(0.1)) + theme(legend.position = "none") #+ scale_y_continuous(trans='log10', oob = scales::squish_infinite)
+p2 <- ggplot(meta_sub, aes(x = as.factor(deadorvent7d), y = CEACAM6_Nasal)) + geom_violin(trim=TRUE) + geom_boxplot(width=0.3, color="blue", outlier.shape = NA) + geom_jitter(shape=16, position=position_jitter(0.1)) + theme(legend.position = "none") #+ scale_y_continuous(trans='log10', oob = scales::squish_infinite)
+p3 <- ggplot(meta_sub, aes(x = as.factor(deadorvent7d), y = MUC19_BAL)) + geom_violin(trim=TRUE) + geom_boxplot(width=0.3, color="blue", outlier.shape = NA) + geom_jitter(shape=16, position=position_jitter(0.1)) + theme(legend.position = "none") #+ scale_y_continuous(trans='log10', oob = scales::squish_infinite)
+p4 <- ggplot(meta_sub, aes(x = as.factor(deadorvent7d), y = MUC19_Nasal)) + geom_violin(trim=TRUE) + geom_boxplot(width=0.3, color="blue", outlier.shape = NA) + geom_jitter(shape=16, position=position_jitter(0.1)) #+ theme(legend.position = "none") + scale_y_continuous(trans='log10', oob = scales::squish_infinite)
+p5 <- ggplot(meta_sub, aes(x = as.factor(deadorvent7d), y = CD74_BAL)) + geom_violin(trim=TRUE) + geom_boxplot(width=0.3, color="blue", outlier.shape = NA) + geom_jitter(shape=16, position=position_jitter(0.1)) + theme(legend.position = "none") #+ scale_y_continuous(trans='log10', oob = scales::squish_infinite)
+p6 <- ggplot(meta_sub, aes(x = as.factor(deadorvent7d), y = CD74_Nasal)) + geom_violin(trim=TRUE) + geom_boxplot(width=0.3, color="blue", outlier.shape = NA) + geom_jitter(shape=16, position=position_jitter(0.1)) + theme(legend.position = "none") #+ scale_y_continuous(trans='log10', oob = scales::squish_infinite)
+p7 <- ggplot(meta_sub, aes(x = as.factor(deadorvent7d), y = HLA.DRA_BAL)) + geom_violin(trim=TRUE) + geom_boxplot(width=0.3, color="blue", outlier.shape = NA) + geom_jitter(shape=16, position=position_jitter(0.1)) + theme(legend.position = "none") #+ scale_y_continuous(trans='log10', oob = scales::squish_infinite)
+p8 <- ggplot(meta_sub, aes(x = as.factor(deadorvent7d), y = HLA.DRA_Nasal)) + geom_violin(trim=TRUE) + geom_boxplot(width=0.3, color="blue", outlier.shape = NA) + geom_jitter(shape=16, position=position_jitter(0.1)) + theme(legend.position = "none") #+ scale_y_continuous(trans='log10', oob = scales::squish_infinite)
+
+plot_grid(p1, p2, p3, p4, p5, p6, p7, p8, ncol=2, align="v")
+
+
+#### Figure 5b = enrichment plots
+df_gxp_vs_deadorvent7d <- read.csv("geeglm_gxpvsdeadorvent7d_balonly_adjagesexpatient_090325_n160independence.csv", header=TRUE, row.names=1, check.names=FALSE)
+df_gxp_vs_deadorvent7d_sub <- df_gxp_vs_deadorvent7d[which(df_gxp_vs_deadorvent7d$fdr<0.05),]
+
+degs <- df_gxp_vs_deadorvent7d_sub$outcome
+geneList <- df_gxp_vs_deadorvent7d_sub$estimate # put LogFC here from edgeR output (tops_filt)
+names(geneList) <- as.character(degs) # put gene SYMBOL here
+geneList = sort(geneList, decreasing = TRUE)
+
+gse_msigdb <- GSEA(geneList, TERM2GENE = m_t2g, minGSSize = 10, maxGSSize = 300, pvalueCutoff = 0.05, pAdjustMethod = "BH",  by = "fgsea") 
+
+head(gse_msigdb, 40)
+gse_msigdb_df <- as.data.frame(gse_msigdb)
+gse_msigdb_df <- gse_msigdb_df[ which(gse_msigdb_df$p.adjust<=0.05), ]
+
+#saveRDS(gse_msigdb, "geeglm_gxpvsdeadorvent7d_balonly_adjagesexpatient_090325_n160independence_GSEA.RDS")
+#write.csv(gse_msigdb_df, "geeglm_gxpvsdeadorvent7d_balonly_adjagesexpatient_090325_n160independence_GSEA.csv")
+
+
+
+ridgeplot(gse_msigdb, showCategory = 30, fill = "p.adjust", core_enrichment = TRUE, label_format = 80) + theme(axis.text.y = element_text(size=8)) # + facet_grid(cols = vars(ifelse(value > 0, "Positive", ifelse(value < 0, "Negative", "Zero"))))
+dotplot(gse_msigdb_df, showCategory = 25, split=".sign", label_format = 80) + facet_grid(.~.sign) + theme(axis.text.y = element_text(size=8))
+cnetplot(gse_msigdb, categorySize="pvalue", node_label="gene", foldChange=geneList, showCategory=50) + theme(plot.caption = element_text(size=2))
+gse_msigdb_termsim <- pairwise_termsim(gse_msigdb, showCategory = 2000)
+emapplot(gse_msigdb_termsim, showCategory=200, nCluster=4, color="enrichmentScore", group=TRUE, size_category=0.3, node_label="none") 
+ssplot(gse_msigdb_termsim, showCategory=200, group=TRUE, node_label="group", nCluster=4)
+
+
+
+```
+
+# Analysis 5b - DATs assoc w composite outcome
+```{r}
+
+
+#### TEST FOR ASSOCIATIONS IN BAL & THEN SEPARATELY IN NASAL, COMPARE LISTS
+bal_genus_sub <- bal_genus[, colSums(bal_genus > 0.0001, na.rm = TRUE) >= ceiling(nrow(bal_genus) * 0.15)]
+bal_genus_log10 <- log10(bal_genus_sub + 0.0001)
+bal_species_sub <- bal_species[, colSums(bal_species > 0.0001, na.rm = TRUE) >= ceiling(nrow(bal_species) * 0.15)]
+bal_species_log10 <- log10(bal_species_sub + 0.0001)
+
+df <- merge(bal_genus_log10, meta, by="row.names")
+rownames(df) <- df$Row.names   
+df <- subset(df, select=-1)
+df_sub <- df %>% group_by(patient_id) %>% slice_max(order_by = as.numeric(age_at_study_years), n = 1) %>% ungroup()  ## n160 =this keeps most recent record per-patient
+
+model <- geeglm(Streptococcus ~ as.factor(deadorvent7d) + age_at_study_years + as.factor(sex), id=as.factor(patient_id), family = gaussian, corstr = "independence", data = df_sub)
+summary(model)        
+
+###
+nasal_genus_sub <- nasal_genus[, colSums(nasal_genus > 0.0001, na.rm = TRUE) >= ceiling(nrow(nasal_genus) * 0.15)]
+nasal_genus_log10 <- log10(nasal_genus_sub + 0.0001)
+nasal_species_sub <- nasal_species[, colSums(nasal_species > 0.0001, na.rm = TRUE) >= ceiling(nrow(nasal_species) * 0.15)]
+nasal_species_log10 <- log10(nasal_species_sub + 0.0001)
+
+df <- merge(nasal_genus_log10, meta, by="row.names")
+rownames(df) <- df$Row.names   
+df <- subset(df, select=-1)
+df_sub <- df %>% group_by(patient_id) %>% slice_max(order_by = as.numeric(age_at_study_years), n = 1) %>% ungroup()  ## n160 =this keeps most recent record per-patient
+
+model <- geeglm(Streptococcus ~ as.factor(deadorvent7d) + age_at_study_years + as.factor(sex), id=as.factor(patient_id), family = gaussian, corstr = "independence", data = df_sub)
+summary(model)        
+
+
+
+### NOW LOOP
+df <- merge(bal_genus_log10, meta, by="row.names")
+df <- merge(nasal_genus_log10, meta, by="row.names")
+    df <- merge(bal_species_log10, meta, by="row.names")
+    df <- merge(nasal_species_log10, meta, by="row.names")
+
+df_sub <- df %>% group_by(patient_id) %>% slice_max(order_by = as.numeric(age_at_study_years), n = 1) %>% ungroup()  ## n160 =this keeps most recent record per-patient
+
+varlist <- colnames(bal_genus_log10) # List of variables using gene counts IN COMMON in both BAL & nasal
+varlist <- colnames(nasal_genus_log10) # List of variables using gene counts IN COMMON in both BAL & nasal
+    varlist <- colnames(bal_species_log10) # List of variables using gene counts IN COMMON in both BAL & nasal
+    varlist <- colnames(nasal_species_log10) # List of variables using gene counts IN COMMON in both BAL & nasal
+
+
+results_df <- map_dfr(varlist, function(var) {
+  message("Fitting: ", var); flush.console()
+  fml <- as.formula(sprintf("`%s` ~ as.factor(deadorvent7d) + age_at_study_years + as.factor(sex)", var))
+  model <- geeglm(fml, id=as.factor(patient_id), family = gaussian, corstr = "independence", data = df)
+  tidy(model, conf.int = TRUE) %>% mutate(outcome = var) %>% 
+    dplyr::select(outcome, term, estimate, conf.low, conf.high, p.value)
+})
+
+
+## NOW APPLY FDR CORRECTION TO JUST THE desired P-VALUES
+results_df_sub <- results_df[results_df$term %in% varlist, ]
+results_df_sub <- results_df[which(results_df$term=="as.factor(deadorvent7d)1"),]
+results_df_sub$fdr <- p.adjust(results_df_sub$p.value, method="fdr")
+nrow(results_df_sub[which(results_df_sub$fdr<0.05),]) 
+results_df_merge <- left_join(results_df, results_df_sub)
+head(results_df_merge, n=10)
+
+#write.csv(results_df_merge, "geeglm_genusvsdeadorvent7d_BALonly_adjagesexpatient_0903025.csv")
+#write.csv(results_df_merge, "geeglm_genusvsdeadorvent7d_nasalonly_adjagesexpatient_090325.csv")
+
+#write.csv(results_df_merge, "geeglm_speciesvsdeadorvent7d_BALonly_adjagesexpatient_090325.csv")
+#write.csv(results_df_merge, "geeglm_speciesvsdeadorvent7d_nasalonly_adjagesexpatient_090325.csv")
+
+
+
+## show example?
+p1 <- ggplot(df_sub, aes(x = as.factor(deadorvent7d), y = Prevotella)) + geom_violin(trim=TRUE) + geom_boxplot(width=0.3, color="blue", outlier.shape = NA) + geom_jitter(shape=16, position=position_jitter(0.1)) + theme(legend.position = "none")
+p2 <- ggplot(df_sub, aes(x = as.factor(deadorvent7d), y = Streptococcus)) + geom_violin(trim=TRUE) + geom_boxplot(width=0.3, color="blue", outlier.shape = NA) + geom_jitter(shape=16, position=position_jitter(0.1)) + theme(legend.position = "none")
+p3 <- ggplot(df_sub, aes(x = as.factor(deadorvent7d), y = Veillonella)) + geom_violin(trim=TRUE) + geom_boxplot(width=0.3, color="blue", outlier.shape = NA) + geom_jitter(shape=16, position=position_jitter(0.1)) + theme(legend.position = "none")
+plot_grid(p1, p2, p3, ncol=3, align="v")
+
+##
+meta_sub <- meta
+meta_sub$Streptococcus_BAL <- bal_genus$Streptococcus
+meta_sub$Streptococcus_Nasal <- nasal_genus$Streptococcus
+meta_sub$Prevotella_BAL <- bal_genus$Prevotella
+meta_sub$Prevotella_Nasal <- nasal_genus$Prevotella
+meta_sub$Veillonella_BAL <- bal_genus$Veillonella
+meta_sub$Veillonella_Nasal <- nasal_genus$Veillonella
+
+meta_sub <- meta_sub %>% group_by(patient_id) %>% slice_max(order_by = as.numeric(age_at_study_years), n = 1) %>% ungroup() 
+
+p1 <- ggplot(meta_sub, aes(x = as.factor(deadorvent7d), y = Prevotella_BAL)) + geom_violin(trim=TRUE) + geom_boxplot(width=0.3, color="blue", outlier.shape = NA) + geom_jitter(shape=16, position=position_jitter(0.1)) + theme(legend.position = "none") + scale_y_continuous(trans='log10', oob = scales::squish_infinite)
+p2 <- ggplot(meta_sub, aes(x = as.factor(deadorvent7d), y = Prevotella_Nasal)) + geom_violin(trim=TRUE) + geom_boxplot(width=0.3, color="blue", outlier.shape = NA) + geom_jitter(shape=16, position=position_jitter(0.1)) + theme(legend.position = "none") + scale_y_continuous(trans='log10', oob = scales::squish_infinite)
+p3 <- ggplot(meta_sub, aes(x = as.factor(deadorvent7d), y = Streptococcus_BAL)) + geom_violin(trim=TRUE) + geom_boxplot(width=0.3, color="blue", outlier.shape = NA) + geom_jitter(shape=16, position=position_jitter(0.1)) + theme(legend.position = "none") + scale_y_continuous(trans='log10', oob = scales::squish_infinite)
+p4 <- ggplot(meta_sub, aes(x = as.factor(deadorvent7d), y = Streptococcus_Nasal)) + geom_violin(trim=TRUE) + geom_boxplot(width=0.3, color="blue", outlier.shape = NA) + geom_jitter(shape=16, position=position_jitter(0.1)) + theme(legend.position = "none") + scale_y_continuous(trans='log10', oob = scales::squish_infinite)
+p5 <- ggplot(meta_sub, aes(x = as.factor(deadorvent7d), y = Veillonella_BAL)) + geom_violin(trim=TRUE) + geom_boxplot(width=0.3, color="blue", outlier.shape = NA) + geom_jitter(shape=16, position=position_jitter(0.1)) + theme(legend.position = "none") + scale_y_continuous(trans='log10', oob = scales::squish_infinite)
+p6 <- ggplot(meta_sub, aes(x = as.factor(deadorvent7d), y = Veillonella_Nasal)) + geom_violin(trim=TRUE) + geom_boxplot(width=0.3, color="blue", outlier.shape = NA) + geom_jitter(shape=16, position=position_jitter(0.1)) + theme(legend.position = "none") + scale_y_continuous(trans='log10', oob = scales::squish_infinite)
+
+plot_grid(p1, p3, p5, p2, p4, p6, ncol=3, align="v")
+plot_grid(p1, p2, p3, p4, p5, p6, ncol=2, align="v")
+
+
+
+
+
+
+```
+
+# Analysis 5c - MOFA
+```{r}
+
+## remove low variance inputs
+bal_genus_filt <- bal_genus[, colSums(bal_genus > 0.001, na.rm = TRUE) >= ceiling(nrow(bal_genus) * 0.15)]
+bal_species_filt <- bal_species[, colSums(bal_species > 0.001, na.rm = TRUE) >= ceiling(nrow(bal_species) * 0.15)]
+bal_genecounts_vst_filt <- filterGenes(t(bal_genecounts_vst), filterTypes = c("central", "dispersion"), filterCentralType = "median", filterCentralPercentile = 0.2, filterDispersionType = "cv", filterDispersionPercentile = 0.2, sequential = TRUE)
+
+nasal_genus_filt <- nasal_genus[, colSums(nasal_genus > 0.001, na.rm = TRUE) >= ceiling(nrow(nasal_genus) * 0.15)]
+nasal_species_filt <- nasal_species[, colSums(nasal_species > 0.001, na.rm = TRUE) >= ceiling(nrow(nasal_species) * 0.15)]
+nasal_genecounts_vst_filt <- filterGenes(t(nasal_genecounts_vst), filterTypes = c("central", "dispersion"), filterCentralType = "median", filterCentralPercentile = 0.2, filterDispersionType = "cv", filterDispersionPercentile = 0.2, sequential = TRUE)
+
+
+## normalize all inputs (log10 or vst!)
+bal_domain_log10 <- bal_domain
+bal_domain_log10$Bacteria <- log10(bal_domain_log10$Bacteria + 0.0001)
+bal_domain_log10$Eukaryota <- log10(bal_domain_log10$Eukaryota + 0.0001)
+bal_domain_log10$Viruses <- log10(bal_domain_log10$Viruses + 0.0001)
+bal_genus_filt_log10 <- log10(bal_genus_filt + 0.0001)
+bal_species_filt_log10 <- log10(bal_species_filt + 0.0001)
+
+nasal_domain_log10 <- nasal_domain
+nasal_domain_log10$Bacteria <- log10(nasal_domain_log10$Bacteria + 0.0001)
+nasal_domain_log10$Eukaryota <- log10(nasal_domain_log10$Eukaryota + 0.0001)
+nasal_domain_log10$Viruses <- log10(nasal_domain_log10$Viruses + 0.0001)
+nasal_genus_filt_log10 <- log10(nasal_genus_filt + 0.0001)
+nasal_species_filt_log10 <- log10(nasal_species_filt + 0.0001)
+
+
+## combine inputs
+z <- list(
+  as.matrix(t(bal_domain_log10)),
+  as.matrix(t(bal_genus_filt_log10)),
+  as.matrix(t(bal_species_filt_log10)),
+  as.matrix((bal_genecounts_vst_filt)), 
+  as.matrix(t(bal_gsva)),
+  as.matrix(t(bal_cells)),
+  as.matrix(t(nasal_domain_log10)),
+  as.matrix(t(nasal_genus_filt_log10)),
+  as.matrix(t(nasal_species_filt_log10)),
+  as.matrix((nasal_genecounts_vst_filt)), 
+  as.matrix(t(nasal_gsva)),
+  as.matrix(t(nasal_cells))
+  )
+
+
+names(z) <- c("BAL domain", "BAL genus", "BAL species", "BAL genecounts", "BAL GSVA", "BAL cells", "Nasal domain", "Nasal genus", "Nasal species", "Nasal genecounts", "Nasal GSVA", "Nasal cells")
+
+
+## create & train the MOFA
+MOFAobject <- create_mofa(z) # features are ROWS, samples are COLUMNS
+MOFAobject
+plot_data_overview(MOFAobject)
+
+data_opts <- get_default_data_options(MOFAobject)
+#data_opts$scale_views <- TRUE
+
+MOFAobject <- prepare_mofa(MOFAobject, data_options= data_opts)
+MOFAobject
+
+MOFAobject <- run_mofa(MOFAobject, use_basilisk=TRUE)
+MOFAobject
+
+slotNames(MOFAobject)
+names(MOFAobject@data)
+names(MOFAobject@expectations)
+
+#saveRDS(MOFAobject, "MOFAobject_090425.RDS")
+MOFAobject <- readRDS("MOFAobject_090425.RDS")
+
+plot_factor_cor(MOFAobject)
+plot_variance_explained(MOFAobject, max_r2=15)
+plot_variance_explained(MOFAobject, plot_total = T)[[2]]
+
+plot_top_weights(MOFAobject, view = c("BAL domain", "BAL genus", "BAL species", "BAL genecounts", "BAL GSVA", "BAL cells", "Nasal domain", "Nasal genus", "Nasal species", "Nasal genecounts", "Nasal GSVA", "Nasal cells"), factor = 4, nfeatures = 50, scale = T)
+
+mofa_factors <- as.data.frame(MOFAobject@expectations[["Z"]][["group1"]])
+
+umap <- run_umap(MOFAobject, n_neighbors = 70, min_dist=0, n_components=3, negative_sample_rate=70, verbose=FALSE) #negative_sample_rate=45,
+mofa_umap_df <- as.data.frame(umap@dim_red[["UMAP"]])
+
+
+scatter3D(x=mofa_umap_df$UMAP1*1, y= mofa_umap_df$UMAP2*1, z=mofa_umap_df$UMAP3, colvar=NULL, alpha=0.5, bty="g", pch=16, cex=1, phi=15, theta=55, xlab="UMAP1", ylab="UMAP2", zlab="UMAP3")
+
+
+fviz_nbclust(mofa_umap_df[-1], kmeans, method = "wss") ### Elbow method:
+fviz_nbclust(mofa_umap_df[-1], kmeans, method = "silhouette") ### Silhouette method
+
+clust <- kmeans(mofa_umap_df[-1], centers = 2, nstart = 25)
+total_cluster <- as.data.frame(clust$cluster)
+colnames(total_cluster)[1] <- "cluster_BAL_Nasal"
+
+mofa_umap_df <- merge(mofa_umap_df, total_cluster, by="row.names")
+rownames(mofa_umap_df) <- mofa_umap_df$Row.names
+mofa_umap_df <- subset(mofa_umap_df, select=-1)
+mofa_umap_df <- merge(mofa_umap_df, meta, by="row.names")
+
+scatter3D(x=mofa_umap_df$UMAP1*1, y= mofa_umap_df$UMAP2*1, z=mofa_umap_df$UMAP3, colvar=as.numeric(mofa_umap_df$cluster_BAL_Nasal), alpha=0.5, bty="g", pch=16, cex=1, phi=15, theta=55, xlab="UMAP1", ylab="UMAP2", zlab="UMAP3",  col=c("red", "blue"))
+
+
+table(mofa_umap_df$cluster_BAL_Nasal, mofa_umap_df$spo2_support_dichot)
+chisq.test(mofa_umap_df$cluster_BAL_Nasal, mofa_umap_df$spo2_support_dichot)
+  ### 1/3 vs 1/2 rate of spo2_dichot
+
+
+mofa_umap_df_sub <- mofa_umap_df %>% group_by(patient_id) %>% slice_max(order_by = as.numeric(age_at_study_years), n = 1) %>% ungroup()  ## this keeps most recent record per-patient
+table(mofa_umap_df_sub$cluster_BAL_Nasal, mofa_umap_df_sub$deadorvent7d)
+chisq.test(mofa_umap_df_sub$cluster_BAL_Nasal, mofa_umap_df_sub$deadorvent7d)
+  ### 13 vs 39% rate of deadorvent7d
+
+rownames(mofa_umap_df) <- mofa_umap_df$Row.names
+mofa_umap_df <- merge(mofa_umap_df, bal_genecounts_vst, by="row.names")
+rownames(mofa_umap_df) <- mofa_umap_df$Row.names
+mofa_umap_df <- subset(mofa_umap_df, select=-1)
+mofa_umap_df <- merge(mofa_umap_df, nasal_genus, by="row.names")
+rownames(mofa_umap_df) <- mofa_umap_df$Row.names
+mofa_umap_df <- subset(mofa_umap_df, select=-1)
+
+ggplot(mofa_umap_df, aes(x = as.factor(cluster_BAL_Nasal), y = FN1)) + geom_violin(trim=TRUE) +
+  geom_boxplot(outlier.size = 0.5, outlier.shape = NA) + theme_minimal() 
+
+ggplot(mofa_umap_df, aes(x = as.factor(cluster_BAL_Nasal), y = log10(Staphylococcus+0.0001))) + geom_violin(trim=TRUE) +
+  geom_boxplot(outlier.size = 0.5, outlier.shape = NA) + theme_minimal() 
+
+##################### degs by cluster
+
+#### TEST FOR ASSOCIATIONS IN BAL & THEN SEPARATELY IN NASAL, COMPARE LISTS
+meta <- merge(meta, total_cluster, by="row.names")
+rownames(meta) <- meta$Row.names
+meta <- subset(meta, select=-Row.names)
+
+bal_meta_temp <- meta
+bal_meta_temp$site <- "BAL"
+rownames(bal_meta_temp) <- paste0(rownames(bal_meta_temp), "_BAL")
+nasal_meta_temp <- meta
+nasal_meta_temp$site <- "Nasal"
+rownames(nasal_meta_temp) <- paste0(rownames(nasal_meta_temp), "_Nasal")
+meta_merge <- rbind(bal_meta_temp, nasal_meta_temp)
+
+df <- merge(genecounts_vst_merge, meta_merge, by="row.names")
+rownames(df) <- df$Row.names   
+df <- subset(df, select=-1)
+
+df_sub <- df[which(df$site=="BAL"),]
+df_sub <- df[which(df$site=="Nasal"),]
+
+#### pick inputs
+bal_genecounts_vst_filter <- filterGenes(t(bal_genecounts_vst), filterTypes = c("central", "dispersion"), filterCentralType = "median", filterCentralPercentile = 0.2, filterDispersionType = "cv", filterDispersionPercentile = 0.2, sequential = TRUE)
+
+nasal_genecounts_vst_filter <- filterGenes(t(nasal_genecounts_vst), filterTypes = c("central", "dispersion"), filterCentralType = "median", filterCentralPercentile = 0.2, filterDispersionType = "cv", filterDispersionPercentile = 0.2, sequential = TRUE)
+
+varlist <- rownames(bal_genecounts_vst_filter) # List of variables using gene counts IN COMMON in both BAL & nasal
+varlist <- rownames(nasal_genecounts_vst_filter) # List of variables using gene counts IN COMMON in both BAL & nasal
+
+nrow(df_sub)
+length(varlist)
+
+#### pick model
+results_df <- map_dfr(varlist, function(var) {
+  message("Fitting: ", var); flush.console()
+  fml <- as.formula(sprintf("`%s` ~ as.factor(cluster_BAL_Nasal) + age_at_study_years + as.factor(sex)", var))
+  model <- geeglm(fml, id=as.factor(patient_id), family = gaussian, corstr = "independence", data = df_sub)
+  tidy(model, conf.int = TRUE) %>% mutate(outcome = var) %>% 
+    dplyr::select(outcome, term, estimate, conf.low, conf.high, p.value)
+})
+
+
+## NOW APPLY FDR CORRECTION TO JUST THE desired P-VALUES
+results_df_sub <- results_df[which(results_df$term=="as.factor(cluster_BAL_Nasal)2"),]
+results_df_sub$fdr <- p.adjust(results_df_sub$p.value, method="fdr")
+nrow(results_df_sub[which(results_df_sub$fdr<0.05),]) 
+results_df_merge <- left_join(results_df, results_df_sub)
+head(results_df_merge, n=10)
+
+#write.csv(results_df_merge, "geeglm_gxpvsCLUSTER_balonly_adjagesexpatient_090325_n189independence.csv")
+#write.csv(results_df_merge, "geeglm_gxpvsCLUSTER_nasalonly_adjagesexpatient_090325_n189independence.csv")
+
+
+# pathway analysis
+library(msigdbr)
+library(clusterProfiler)
+
+setwd("Q:/Erica/Analysis")
+degs <- read.csv("geeglm_gxpvsCLUSTER_balonly_adjagesexpatient_090325_n189independence.csv", header=TRUE, row.names=1, check.names=FALSE)
+degs <- degs[which(!is.na(degs$fdr)),]
+degs <- degs[which(degs$fdr<0.05),]
+#edgeR_degs <- edgeR_degs[which(abs(edgeR_degs$logFC)>=1),]
+geneList <- degs[,3] # put LogFC here from edgeR output (tops_filt)
+names(geneList) <- as.character(degs$outcome) # put gene SYMBOL here
+geneList = sort(geneList, decreasing = TRUE)
+
+gse_msigdb <- GSEA(geneList, TERM2GENE = m_t2g2, minGSSize = 10, maxGSSize = 300, pvalueCutoff = 0.05, pAdjustMethod = "BH",  by = "fgsea") 
+
+head(gse_msigdb, 40)
+gse_msigdb_df <- as.data.frame(gse_msigdb)
+gse_msigdb_df <- gse_msigdb_df[ which(gse_msigdb_df$p.adjust<=0.05), ]
+
+write.csv(gse_msigdb_df, "geeglm_gxpvsCLUSTER_balonly_adjagesexpatient_090325_n189independence_GSEA.csv")
+```
+
+# Analysis 5d - MOFA cluster x clinical data
+```{r}
+
+# Demographics & Medical History
+n_distinct(meta$sample_id)            ## 189 sample-pairs (encounters)
+n_distinct(meta$hospitalization_id)   ## 180 hospitalizations
+n_distinct(meta$patient_id)           ## 160 patients
+
+meta <- merge(meta, total_cluster, by="row.names")
+
+meta_sub <- meta %>% group_by(patient_id) %>% slice_max(order_by = as.numeric(age_at_study_years), n = 1) %>% ungroup()
+
+
+table1a <- CreateTableOne(
+  vars = c("age_at_study_years", "sex", "race", "ethnicity_dichot", "region", "disease", "disease_cat", "hsct_type", "hsct_source", "hsct_donor_cat", "busulfan", "melphalan", "serotherapy", "tbi"),
+  data = meta_sub,
+  strata="cluster_BAL_Nasal",
+  includeNA = TRUE,
+  factorVars = c("sex", "race", "ethnicity_dichot", "disease", "disease_cat",
+                 "hsct_type", "hsct_source", "hsct_donor_cat",
+                 "busulfan", "melphalan", "serotherapy", "tbi"))
+print(table1a, nonnormal = c("age_at_study_years"), showAllLevels = TRUE, missing = TRUE)
+
+
+# Characteristics at Enrollment (n = 189 events with paired BAL-Nasal samples)
+table1b <- CreateTableOne(
+  vars = c("hsct_to_study_days", "symptoms_to_study_days", "spo2_support", "spo2_support_trichot", "engraftment_syndrome", "gvhd", "gvhd_ever", "heart_failure", "kidney_injury", "pericardial_effusion", "pulmonary_hemorrhage", "sepsis", "TMA", "VOD", "anc", "alc", "diagnosis_wo_ngs", "ips_subtype_wo_ngs"),
+  data = meta,
+    strata="cluster_BAL_Nasal",
+  includeNA = TRUE,
+  factorVars = c("spo2_support", "spo2_support_trichot", "engraftment_syndrome", "gvhd", "gvhd_ever", "heart_failure", "kidney_injury", "pericardial_effusion", "pulmonary_hemorrhage", "sepsis", "TMA", "VOD", "diagnosis_wo_ngs", "ips_subtype_wo_ngs"))
+print(table1b, nonnormal = c("age_at_study_years", "hsct_to_study_days", "symptoms_to_study_days", "anc", "alc"), showAllLevels = TRUE, missing = TRUE)
+
+sum(meta$anc <0.5, na.rm = TRUE)
+sum(meta$alc <0.2, na.rm = TRUE)
+
+
+# Outcomes (per hospitalization?)
+table1c <- CreateTableOne(
+  vars = c("picu", "ippv_7d_min", "outcome_dichot", "deadorvent7d", "km_outcome_dichot"),
+  data = meta_sub,
+    strata="cluster_BAL_Nasal",
+  includeNA = TRUE,
+  factorVars = c("picu", "ippv_7d_min", "outcome_dichot", "deadorvent7d", "km_outcome_dichot"))
+print(table1c, showAllLevels = TRUE, missing = TRUE)
+
+table(meta_sub$ippv_7d_min, meta_sub$deadorvent7d)
+
+sum(meta_sub$vfd<21, na.rm = TRUE)
+
+```
+#.
+
+
